@@ -186,7 +186,7 @@ export const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  // send email to user
+  // generate reset token
   const resetToken = await account.generateResetToken();
 
   res.json({ resetToken });
@@ -211,15 +211,24 @@ export const resetMyPassword = catchAsyncErrors(async (req, res, next) => {
   // send error
   if (!account) {
     return next(
-      new ServerError('This account does not exist on our server', 401)
+      new ServerError('This account does not exist on our server', 404)
+    );
+  }
+
+  // don't allow account to use the same password as current one
+  if (await account.validatePassword(password)) {
+    return next(
+      new ServerError('Your current and new password cannot be the same', 400)
     );
   }
 
   // update password and default reset token & exp date
-  objectAssign(
-    { password, resetToken: undefined, resetTokenExpirationDate: undefined },
-    account
-  );
+  // didn't use objectAssign because it's strict will not assign falsy values
+  account.resetToken = undefined;
+  account.resetTokenExpirationDate = undefined;
+  account.password = password;
+
+  console.log(account);
 
   // logout all tokens stored before pwd change
   account.tokens = [];
@@ -227,7 +236,7 @@ export const resetMyPassword = catchAsyncErrors(async (req, res, next) => {
   // save account
   await account.save();
 
-  res.json({ account });
+  res.json(account);
 });
 
 export const verifyAccount = catchAsyncErrors(async (req, res, next) => {
@@ -236,7 +245,6 @@ export const verifyAccount = catchAsyncErrors(async (req, res, next) => {
 
   const hash = hashToken(code);
 
-  console.log('code: ', code, 'hash: ', hash);
   // find account with this code and make sure it has not expired
   const account = await Account.findOne({
     verificationCode: hash,
@@ -268,7 +276,7 @@ export const verifyAccount = catchAsyncErrors(async (req, res, next) => {
   await account.save();
 
   // respond to client
-  res.json({ message: 'Your account is successfully verfified' });
+  res.json({ message: 'Your account has successfully been verfified' });
 });
 
 export const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
@@ -280,23 +288,9 @@ export const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
   }
 
   // generate verification code
-  const code = await account.generateVerificationCode();
+  const verificationCode = await account.generateVerificationCode();
 
-  const verficationLink = `${req.protocol}://${req.hostname}/api/v1/accounts/verify/${code}`; // https://localhost:80/
-
-  console.log(verficationLink);
-
-  // send email to logged in account
-  const info = await sendEmail({
-    from: 'abdourahmanedbalde@gmail.com',
-    to: account.email,
-    subject: 'Hello',
-    html: `this is your verification code. Please send a request to <a href='${verficationLink}'>${verficationLink}</a>`,
-  });
-
-  console.log(info);
-
-  res.json(code);
+  res.json({ verificationCode });
 });
 
 // SYSTEM ROUTE HANDLERS
