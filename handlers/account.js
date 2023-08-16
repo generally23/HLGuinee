@@ -1,10 +1,12 @@
 import Account from '../schemas/account';
 import { ServerError, catchAsyncErrors } from './errors';
 import {
+  generateAccountEmail,
+  generateCustomEmail,
+  generateDfPassword,
   generateJwt,
   hashToken,
   objectAssign,
-  sendEmail,
   setCookie,
   uploadAvatar,
 } from '../utils';
@@ -36,7 +38,7 @@ export const signup = catchAsyncErrors(async (req, res, next) => {
   await account.save();
 
   // get account avatar if uploaded
-  const avatar = req.files[0];
+  const avatar = req.files ? req.files[0] : undefined;
 
   // proccess and upload avatar to s3
   await uploadAvatar(avatar, account, next);
@@ -137,7 +139,7 @@ export const getMyAccount = catchAsyncErrors(async (req, res, next) => {
 export const updateMyAccount = catchAsyncErrors(async (req, res, next) => {
   const { account } = req;
 
-  const avatar = req.files[0];
+  const avatar = req.files ? req.files[0] : undefined;
 
   const { firstname, lastname } = req.body;
 
@@ -177,7 +179,7 @@ export const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
 export const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
   const { email } = req.body;
 
-  const account = await Account.findOne({ email });
+  const account = await Account.findOne({ email, role: 'client' });
 
   // send error
   if (!account) {
@@ -283,7 +285,7 @@ export const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
   const { account } = req;
 
   // don't send code to email if user is already verified
-  if (account.verfied) {
+  if (account.verified) {
     return next(new ServerError('This account is already verified', 400));
   }
 
@@ -327,7 +329,9 @@ export const systemSignIn = catchAsyncErrors(async (req, res, next) => {
 
   await account.save();
 
-  setCookie(res, 'Auth-Token', token);
+  // setCookie(res, 'Auth-Token', token);
+
+  res.setHeader('auth_token', token);
 
   res.json(account);
 });
@@ -335,10 +339,28 @@ export const systemSignIn = catchAsyncErrors(async (req, res, next) => {
 // ADMIN ONLY FUNCTIONS
 export const systemAdminCreateAccount = catchAsyncErrors(
   async (req, res, next) => {
+    // don't allow admin accounts creations
+    if (req.body.role === 'admin') {
+      return next(
+        new ServerError(
+          'You do not have permission to perform these actions',
+          403
+        )
+      );
+    }
+
     const account = new Account(req.body);
 
-    account.password = process.env.DEFAULT_SYSTEM_PASSWORD;
+    const { firstname, lastname } = account;
 
+    // generate email
+    account.email = generateAccountEmail(firstname, lastname);
+
+    // generate default for account
+    account.password = generateDfPassword(firstname, lastname);
+    // set these accounts as verified (unnecessary anyways)
+    account.verified = true;
+    // save account
     await account.save();
 
     res.status(201).json(account);
@@ -364,19 +386,41 @@ export const systemAdminAccountUpdate = catchAsyncErrors(
 
 export const systemAdminRemoveAccount = catchAsyncErrors(
   async (req, res, next) => {
+    const account = await Account.findById(req.params.accountId);
+
+    if (!account) return next(new ServerError('Account not found', 404));
+
+    if (
+      account.role === 'admin' ||
+      (req.account.role === 'sub-admin' &&
+        account.role === 'sub-admin' &&
+        !account._id.equals(req.account.id))
+    )
+      return next(
+        new ServerError("You're not allowed to perform these actions", 404)
+      );
+    // delete account
     await Account.deleteOne({ _id: req.params.accountId });
+    // send response
     res.status(204).json();
   }
 );
 
 export const systemAdminPasswordChange = catchAsyncErrors(
   async (req, res, next) => {
-    const account = await Account.findById(req.params.accountId);
+    const account = await Account.findOne({
+      _id: req.params.accountId,
+      role: { $in: ['admin', 'sub-admin', 'agent'] },
+    });
     // if account does not exist send err
     if (!account) {
       return next(new ServerError('Account not found', 401));
     }
 
+    // if (account.role === 'admin'account._id.equals(req.account.id)) {
+
+    // }
+    // reset password to default and force account to update password
     account.password = process.env.DEFAULT_SYSTEM_PASSWORD || 'DFSP-APP';
 
     await account.save();
@@ -384,3 +428,8 @@ export const systemAdminPasswordChange = catchAsyncErrors(
     res.json();
   }
 );
+
+export const systemGetAccounts = catchAsyncErrors(async (req, res, next) => {
+  const accounts = await Account.find();
+  res.json(accounts);
+});

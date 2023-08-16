@@ -7,7 +7,7 @@ export const authenticate = (type = 'client') => {
   return catchAsyncErrors(async (req, res, next) => {
     let query;
 
-    const noAuthError = new ServerError('You are not authenticated', 401);
+    const authFailError = new ServerError('You are not authenticated', 401);
     // get token
     const token = req.headers['authorization'];
 
@@ -18,7 +18,7 @@ export const authenticate = (type = 'client') => {
     const decoded = verify(token, process.env.JWT_SECRET_KEY || 'secret');
 
     if (!decoded) {
-      return next(noAuthError);
+      return next(authFailError);
     }
     // system auth
     if (type === 'system')
@@ -26,12 +26,12 @@ export const authenticate = (type = 'client') => {
     // client auth
     else if (type === 'client') query = { tokens: token, role: 'client' };
     // unknown auth
-    else return next(noAuthError);
+    else return next(authFailError);
 
     // find account that has role as client
     const account = await Account.findOne(query);
 
-    if (!account) return next(noAuthError);
+    if (!account) return next(authFailError);
 
     req.account = account;
     req.token = token;

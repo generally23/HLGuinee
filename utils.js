@@ -4,7 +4,6 @@ import { uploadToS3 } from './s3';
 import { ServerError } from './handlers/errors';
 import uid from 'uniqid';
 import { sign } from 'jsonwebtoken';
-import nodemailer from 'nodemailer';
 import crypto from 'crypto';
 
 export const objectAssign = (source, target) => {
@@ -284,4 +283,17 @@ export const hashToken = (raw) => {
 export const setCookie = (res, name, value, options) => {
   options = { maxAge: 30 * 24 * 60 * 60 * 1000, httpOnly: true, ...options };
   res.cookie(name, value, options);
+};
+
+export const generateAccountEmail = (fn = '', ln = '') => {
+  // random number from 0 - 1000
+  const random = Math.round(Math.random() * 1000);
+  // company email extension @company.com
+  const ext = process.env.SYSTEM_EMAIL_EXT;
+  // combine user info and random num + ext to generate a unique email
+  return fn + ln + random + ext;
+};
+
+export const generateDfPassword = (fn = '', ln = '') => {
+  return `PASS-${fn.slice(0, 2)}${ln.slice(0, 2)}`;
 };

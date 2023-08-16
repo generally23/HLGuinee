@@ -2,22 +2,36 @@ import mongoose from 'mongoose';
 import argon from 'argon2';
 import { deleteProps, hashToken } from '../utils';
 import crypto from 'crypto';
+import emailValidator from 'email-validator';
 
 // SCHEMA
 const accountSchema = new mongoose.Schema(
   {
     firstname: {
       type: String,
-      required: [true],
+      minlength: [4, 'Firstname cannot be less than 5 characetrs'],
+      maxlength: [15, 'Firstname cannot exceed 15 characters'],
+      required: [true, 'Firstname is required'],
+      lowercase: true,
     },
     lastname: {
       type: String,
-      required: [true],
+      minlength: [2, 'Lastname cannot be less than 2 characetrs'],
+      maxlength: [10, 'Lastname cannot exceed 10 characters'],
+      required: [true, 'Lastname is required'],
+      lowercase: true,
     },
     email: {
       type: String,
-      required: [true],
-      unique: [true],
+      required: [true, 'Email is required'],
+      unique: [true, 'Email already exist'],
+      lowercase: true,
+      validate: {
+        validator(value) {
+          return emailValidator.validate(value);
+        },
+        message: 'Invalid email address',
+      },
     },
     contacts: {
       type: [{ type: String, required: true }],
@@ -34,7 +48,7 @@ const accountSchema = new mongoose.Schema(
     },
     password: {
       type: String,
-      required: [true],
+      required: [true, 'Password is required'],
     },
     avatarNames: [String],
     dob: {
@@ -49,7 +63,6 @@ const accountSchema = new mongoose.Schema(
 
     ip: {
       type: String,
-      required: [true],
     },
     signedIn: {
       type: Date,
@@ -59,7 +72,7 @@ const accountSchema = new mongoose.Schema(
     },
     verified: {
       type: Boolean,
-      required: true,
+      required: [true, 'Verified is required'],
       default: false,
     },
     verificationCode: String,
@@ -86,7 +99,7 @@ accountSchema.virtual('avatarUrls').get(function () {
 accountSchema.pre('save', async function (next) {
   // user account
   const account = this;
-  // stop execution here if password field has not changed
+  // move to next midware if password hasn't changed
   if (!account.isModified('password')) return next();
   // min and max length required because pwd is being modified to hash pre save, and hash is long
   // pwd minlength
@@ -99,7 +112,6 @@ accountSchema.pre('save', async function (next) {
   console.log(password);
 
   if (password < minlength || password > maxlength) {
-    // error
     return next(
       new ServerError('Your password is either too short or too long', 400)
     );

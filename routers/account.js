@@ -24,7 +24,7 @@ const router = express.Router();
 
 const parentRoute = '/accounts';
 
-const systemParentRoute = `system/${parentRoute}`;
+const systemParentRoute = `/system${parentRoute}`;
 
 router.post(`${parentRoute}/signup`, uploader({ files: 1 }).any(), signup);
 
@@ -83,26 +83,34 @@ router.patch(
 );
 
 // ADMIN ROUTES
+router.get(
+  `${systemParentRoute}/my-account`,
+  authenticate('system'),
+  getMyAccount
+);
+
 router.post(
   `${systemParentRoute}/create-account`,
   authenticate('system'),
+  allowAccessTo('admin', 'sub-admin'),
   systemAdminCreateAccount
 );
 router.patch(
-  `${systemParentRoute}/update-account`,
+  `${systemParentRoute}/update-account/:accountId`,
   authenticate('system'),
-  allowAccessTo('admin'),
+  allowAccessTo('admin', 'sub-admin'),
   systemAdminAccountUpdate
 );
 router.delete(
-  `${systemParentRoute}/delete-account`,
+  `${systemParentRoute}/delete-account/:accountId`,
   authenticate('system'),
-  allowAccessTo('admin'),
+  allowAccessTo('admin', 'sub-admin'),
   systemAdminRemoveAccount
 );
 router.patch(
-  `${systemParentRoute}/change-password`,
+  `${systemParentRoute}/change-password/:accountId`,
   authenticate('system'),
+  allowAccessTo('admin', 'sub-admin'),
   systemAdminPasswordChange
 );
 

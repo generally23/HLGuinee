@@ -33,7 +33,13 @@ router
   .patch(authenticate(), updateProperty)
   .delete(authenticate(), removeProperty);
 
-router.post(`${childRoute}/images`, authenticate(), addPropertyImages);
+router.post(
+  `${childRoute}/images`,
+  authenticate(),
+  uploader({ files: 12 }).any(),
+  addPropertyImages
+);
+
 router.delete(
   `${childRoute}/images/:imageName`,
   authenticate(),

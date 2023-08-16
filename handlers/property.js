@@ -4,7 +4,14 @@ import { removeFroms3 } from '../s3';
 import { objectAssign, paginateModel, uploadPropertyImages } from '../utils';
 
 export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
-  const { search, type, documented, page = 1, limit = 15 } = req.query;
+  const {
+    search,
+    type,
+    documented,
+    page = 1,
+    limit = 15,
+    location,
+  } = req.query;
   // object containg search query
   const searchObject = {};
   // only assign search query to search object when present
@@ -80,7 +87,7 @@ export const updateProperty = catchAsyncErrors(async (req, res, next) => {
   // don't allow anyone to update property owner
   delete req.body.ownerId;
 
-  const property = await Property.findById(req.params.id);
+  const property = await Property.findById(req.params.propertyId);
 
   if (!property) {
     // error
@@ -89,11 +96,7 @@ export const updateProperty = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  if (
-    !property.ownerId.equals(req.account.id) ||
-    req.account.role !== process.env.MASTER_ROLE ||
-    'admin'
-  ) {
+  if (!property.ownerId.equals(req.account.id)) {
     return next(
       new ServerError(
         'You do not have enough credentials to perform this action',
@@ -110,18 +113,22 @@ export const updateProperty = catchAsyncErrors(async (req, res, next) => {
 });
 
 export const removeProperty = catchAsyncErrors(async (req, res, next) => {
-  const property = await property.findById(req.params.id);
+  // find property
+  const property = await Property.findById(req.params.propertyId);
 
+  // send error if property doesn't exist
   if (!property) {
     return next(
       new ServerError('This property does not exist on our server', 404)
     );
   }
 
+  // only property owner and admin allowed accounts can delete
+  const allowedAccounts = ['admin', 'sub-admin', 'agent'];
+
   if (
     !property.ownerId.equals(req.account.id) ||
-    req.account.role !== process.env.MASTER_ROLE ||
-    'admin'
+    !allowedAccounts.includes(req.account.role)
   ) {
     return next(
       new ServerError(
@@ -131,6 +138,15 @@ export const removeProperty = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
+  // delete all images of property from s3
+
+  const images = property.imagesNames;
+
+  for (let image of images) {
+    await removeFroms3(image.names);
+  }
+
+  // delete property from records
   await Property.deleteOne({ _id: property.id });
 
   res.status(204).json();
@@ -138,13 +154,10 @@ export const removeProperty = catchAsyncErrors(async (req, res, next) => {
 
 export const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
   // find property
-  const property = await Property.findOne(req.params.propertyId);
-  // how many images are stored for this property
-  const propertyImagesLength = property.imagesNames.length;
-  // uploaded images
-  const uploadedImages = req.files || [];
-  // maximum number of images allowed for a single property
-  const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 12;
+  const property = await Property.findOne({
+    _id: req.params.propertyId,
+    ownerId: req.account.id,
+  });
 
   // send an error if property is not found
   if (!property) {
@@ -153,12 +166,14 @@ export const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  // only owner is allowed to add images to a property
-  if (!property.ownerId.equals(req.account.id)) {
-    return next(
-      new ServerError('You are not allowed to perform this action', 404)
-    );
-  }
+  // how many images are stored for this property
+  const propertyImagesLength = property.imagesNames.length;
+  // uploaded images
+  const uploadedImages = req.files || [];
+
+  console.log(uploadedImages);
+  // maximum number of images allowed for a single property
+  const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 12;
 
   if (
     propertyImagesLength >= maxImagesLength ||
@@ -172,23 +187,20 @@ export const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  await uploadPropertyImages(images, property, next);
+  await uploadPropertyImages(uploadedImages, property, next);
 
   res.json(property);
 });
 
 export const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
   // account
-  const account = { req };
+  const { account } = req;
 
   // imageName and propertyId
   const { imageName, propertyId } = req.params;
 
   // find property
-  const property = await Property.findOne(propertyId);
-
-  // imageNames
-  const { imagesNames } = property;
+  const property = await Property.findById(propertyId);
 
   // send an error if property is not found
   if (!property) {
@@ -198,11 +210,15 @@ export const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
   }
 
   // allow only owner and admin to delete image
+  console.log(property.ownerId.equals(account.id));
   if (!property.ownerId.equals(account.id)) {
     return next(
       new ServerError('You are not allowed to perform this action', 403)
     );
   }
+
+  // imageNames
+  const { imagesNames } = property;
 
   // try to find the image to be deleted
   const image = property.imagesNames.find(
@@ -215,8 +231,10 @@ export const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  await removeFroms3(imageName);
+  // remove image and all it's duplicates from s3
+  await removeFroms3(image.names);
 
+  // remove image info from db
   property.imagesNames = imagesNames.filter(
     (imageObject) => imageObject.sourceName !== imageName
   );

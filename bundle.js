@@ -12,9 +12,9 @@ var sharp = require('sharp');
 var clientS3 = require('@aws-sdk/client-s3');
 var uid = require('uniqid');
 var jsonwebtoken = require('jsonwebtoken');
-var nodemailer = require('nodemailer');
 var crypto = require('crypto');
 var argon = require('argon2');
+var emailValidator = require('email-validator');
 var dotenv = require('dotenv');
 
 const createS3Instance = () => {
@@ -53,10 +53,11 @@ const uploadToS3 = async (files = []) => {
   }
 };
 
-const removeFroms3 = async (...fileNames) => {
+const removeFroms3 = async (fileNames = []) => {
   const s3Instance = createS3Instance();
   const bucketName = process.env.AWS_BUCKET_NAME;
 
+  console.log(fileNames);
   // Delete each given filename from the s3 Bucket
   for (let filename of fileNames) {
     // command parameters
@@ -406,26 +407,21 @@ const paginateModel = async (
   };
 };
 
-const sendEmail = async (content) => {
-  const transporter = nodemailer.createTransport({
-    host: 'smtp-relay.brevo.com',
-    port: 587,
-    auth: {
-      user: 'rallygene0@gmail.com',
-      pass: 'FvtRrDY5WV9hTPJn',
-    },
-  });
-
-  return await transporter.sendMail(content);
-};
-
 const hashToken = (raw) => {
   return crypto.createHash('sha256').update(raw).digest('hex');
 };
 
-const setCookie = (res, name, value, options) => {
-  options = { maxAge: 30 * 24 * 60 * 60 * 1000, httpOnly: true, ...options };
-  res.cookie(name, value, options);
+const generateAccountEmail = (fn = '', ln = '') => {
+  // random number from 0 - 1000
+  const random = Math.round(Math.random() * 1000);
+  // company email extension @company.com
+  const ext = process.env.SYSTEM_EMAIL_EXT;
+  // combine user info and random num + ext to generate a unique email
+  return fn + ln + random + ext;
+};
+
+const generateDfPassword = (fn = '', ln = '') => {
+  return `PASS-${fn.slice(0, 2)}${ln.slice(0, 2)}`;
 };
 
 // SCHEMA
@@ -433,19 +429,20 @@ const offerSchema = new mongoose.Schema(
   {
     offererId: {
       type: mongoose.Schema.Types.ObjectId,
-      required: [true],
+      required: [true, 'ID of offerer is required'],
     },
     offerPrice: {
       type: Number,
+      required: [true, 'Offer price is required'],
     },
     paymentType: {
       type: String,
       enum: ['cash', 'check', 'transfer'],
-      required: [true],
+      required: [true, 'A payment type for an offer is required'],
     },
     propertyId: {
       type: mongoose.Schema.Types.ObjectId,
-      required: [true],
+      required: [true, 'ID of property receiving offer is required'],
     },
   },
   { timestamps: true, toJSON: { virtuals: true } }
@@ -701,16 +698,29 @@ const accountSchema = new mongoose.Schema(
   {
     firstname: {
       type: String,
-      required: [true],
+      minlength: [4, 'Firstname cannot be less than 5 characetrs'],
+      maxlength: [15, 'Firstname cannot exceed 15 characters'],
+      required: [true, 'Firstname is required'],
+      lowercase: true,
     },
     lastname: {
       type: String,
-      required: [true],
+      minlength: [2, 'Lastname cannot be less than 2 characetrs'],
+      maxlength: [10, 'Lastname cannot exceed 10 characters'],
+      required: [true, 'Lastname is required'],
+      lowercase: true,
     },
     email: {
       type: String,
-      required: [true],
-      unique: [true],
+      required: [true, 'Email is required'],
+      unique: [true, 'Email already exist'],
+      lowercase: true,
+      validate: {
+        validator(value) {
+          return emailValidator.validate(value);
+        },
+        message: 'Invalid email address',
+      },
     },
     contacts: {
       type: [{ type: String, required: true }],
@@ -727,7 +737,7 @@ const accountSchema = new mongoose.Schema(
     },
     password: {
       type: String,
-      required: [true],
+      required: [true, 'Password is required'],
     },
     avatarNames: [String],
     dob: {
@@ -742,7 +752,6 @@ const accountSchema = new mongoose.Schema(
 
     ip: {
       type: String,
-      required: [true],
     },
     signedIn: {
       type: Date,
@@ -752,7 +761,7 @@ const accountSchema = new mongoose.Schema(
     },
     verified: {
       type: Boolean,
-      required: true,
+      required: [true, 'Verified is required'],
       default: false,
     },
     verificationCode: String,
@@ -779,7 +788,7 @@ accountSchema.virtual('avatarUrls').get(function () {
 accountSchema.pre('save', async function (next) {
   // user account
   const account = this;
-  // stop execution here if password field has not changed
+  // move to next midware if password hasn't changed
   if (!account.isModified('password')) return next();
   // min and max length required because pwd is being modified to hash pre save, and hash is long
   // pwd minlength
@@ -792,7 +801,6 @@ accountSchema.pre('save', async function (next) {
   console.log(password);
 
   if (password < minlength || password > maxlength) {
-    // error
     return next(
       new ServerError('Your password is either too short or too long', 400)
     );
@@ -874,7 +882,7 @@ const authenticate = (type = 'client') => {
   return catchAsyncErrors(async (req, res, next) => {
     let query;
 
-    const noAuthError = new ServerError$1('You are not authenticated', 401);
+    const authFailError = new ServerError$1('You are not authenticated', 401);
     // get token
     const token = req.headers['authorization'];
 
@@ -885,7 +893,7 @@ const authenticate = (type = 'client') => {
     const decoded = jsonwebtoken.verify(token, process.env.JWT_SECRET_KEY || 'secret');
 
     if (!decoded) {
-      return next(noAuthError);
+      return next(authFailError);
     }
     // system auth
     if (type === 'system')
@@ -893,12 +901,12 @@ const authenticate = (type = 'client') => {
     // client auth
     else if (type === 'client') query = { tokens: token, role: 'client' };
     // unknown auth
-    else return next(noAuthError);
+    else return next(authFailError);
 
     // find account that has role as client
     const account = await Account.findOne(query);
 
-    if (!account) return next(noAuthError);
+    if (!account) return next(authFailError);
 
     req.account = account;
     req.token = token;
@@ -952,7 +960,14 @@ router$2
   .delete(authenticate(), removeOffer);
 
 const fetchProperties = catchAsyncErrors(async (req, res, next) => {
-  const { search, type, documented, page = 1, limit = 15 } = req.query;
+  const {
+    search,
+    type,
+    documented,
+    page = 1,
+    limit = 15,
+    location,
+  } = req.query;
   // object containg search query
   const searchObject = {};
   // only assign search query to search object when present
@@ -1028,7 +1043,7 @@ const updateProperty = catchAsyncErrors(async (req, res, next) => {
   // don't allow anyone to update property owner
   delete req.body.ownerId;
 
-  const property = await Property.findById(req.params.id);
+  const property = await Property.findById(req.params.propertyId);
 
   if (!property) {
     // error
@@ -1037,11 +1052,7 @@ const updateProperty = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  if (
-    !property.ownerId.equals(req.account.id) ||
-    req.account.role !== process.env.MASTER_ROLE ||
-    'admin'
-  ) {
+  if (!property.ownerId.equals(req.account.id)) {
     return next(
       new ServerError$1(
         'You do not have enough credentials to perform this action',
@@ -1058,18 +1069,22 @@ const updateProperty = catchAsyncErrors(async (req, res, next) => {
 });
 
 const removeProperty = catchAsyncErrors(async (req, res, next) => {
-  const property = await property.findById(req.params.id);
+  // find property
+  const property = await Property.findById(req.params.propertyId);
 
+  // send error if property doesn't exist
   if (!property) {
     return next(
       new ServerError$1('This property does not exist on our server', 404)
     );
   }
 
+  // only property owner and admin allowed accounts can delete
+  const allowedAccounts = ['admin', 'sub-admin', 'agent'];
+
   if (
     !property.ownerId.equals(req.account.id) ||
-    req.account.role !== process.env.MASTER_ROLE ||
-    'admin'
+    !allowedAccounts.includes(req.account.role)
   ) {
     return next(
       new ServerError$1(
@@ -1079,6 +1094,15 @@ const removeProperty = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
+  // delete all images of property from s3
+
+  const images = property.imagesNames;
+
+  for (let image of images) {
+    await removeFroms3(image.names);
+  }
+
+  // delete property from records
   await Property.deleteOne({ _id: property.id });
 
   res.status(204).json();
@@ -1086,13 +1110,10 @@ const removeProperty = catchAsyncErrors(async (req, res, next) => {
 
 const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
   // find property
-  const property = await Property.findOne(req.params.propertyId);
-  // how many images are stored for this property
-  const propertyImagesLength = property.imagesNames.length;
-  // uploaded images
-  const uploadedImages = req.files || [];
-  // maximum number of images allowed for a single property
-  const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 12;
+  const property = await Property.findOne({
+    _id: req.params.propertyId,
+    ownerId: req.account.id,
+  });
 
   // send an error if property is not found
   if (!property) {
@@ -1101,12 +1122,14 @@ const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  // only owner is allowed to add images to a property
-  if (!property.ownerId.equals(req.account.id)) {
-    return next(
-      new ServerError$1('You are not allowed to perform this action', 404)
-    );
-  }
+  // how many images are stored for this property
+  const propertyImagesLength = property.imagesNames.length;
+  // uploaded images
+  const uploadedImages = req.files || [];
+
+  console.log(uploadedImages);
+  // maximum number of images allowed for a single property
+  const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 12;
 
   if (
     propertyImagesLength >= maxImagesLength ||
@@ -1120,23 +1143,20 @@ const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  await uploadPropertyImages(images, property, next);
+  await uploadPropertyImages(uploadedImages, property, next);
 
   res.json(property);
 });
 
 const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
   // account
-  const account = { req };
+  const { account } = req;
 
   // imageName and propertyId
   const { imageName, propertyId } = req.params;
 
   // find property
-  const property = await Property.findOne(propertyId);
-
-  // imageNames
-  const { imagesNames } = property;
+  const property = await Property.findById(propertyId);
 
   // send an error if property is not found
   if (!property) {
@@ -1146,11 +1166,15 @@ const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
   }
 
   // allow only owner and admin to delete image
+  console.log(property.ownerId.equals(account.id));
   if (!property.ownerId.equals(account.id)) {
     return next(
       new ServerError$1('You are not allowed to perform this action', 403)
     );
   }
+
+  // imageNames
+  const { imagesNames } = property;
 
   // try to find the image to be deleted
   const image = property.imagesNames.find(
@@ -1163,8 +1187,10 @@ const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  await removeFroms3(imageName);
+  // remove image and all it's duplicates from s3
+  await removeFroms3(image.names);
 
+  // remove image info from db
   property.imagesNames = imagesNames.filter(
     (imageObject) => imageObject.sourceName !== imageName
   );
@@ -1195,7 +1221,13 @@ router$1
   .patch(authenticate(), updateProperty)
   .delete(authenticate(), removeProperty);
 
-router$1.post(`${childRoute}/images`, authenticate(), addPropertyImages);
+router$1.post(
+  `${childRoute}/images`,
+  authenticate(),
+  uploader({ files: 12 }).any(),
+  addPropertyImages
+);
+
 router$1.delete(
   `${childRoute}/images/:imageName`,
   authenticate(),
@@ -1234,7 +1266,7 @@ const signup = catchAsyncErrors(async (req, res, next) => {
   await account.save();
 
   // get account avatar if uploaded
-  const avatar = req.files[0];
+  const avatar = req.files ? req.files[0] : undefined;
 
   // proccess and upload avatar to s3
   await uploadAvatar(avatar, account, next);
@@ -1335,7 +1367,7 @@ const getMyAccount = catchAsyncErrors(async (req, res, next) => {
 const updateMyAccount = catchAsyncErrors(async (req, res, next) => {
   const { account } = req;
 
-  const avatar = req.files[0];
+  const avatar = req.files ? req.files[0] : undefined;
 
   const { firstname, lastname } = req.body;
 
@@ -1375,7 +1407,7 @@ const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
 const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
   const { email } = req.body;
 
-  const account = await Account.findOne({ email });
+  const account = await Account.findOne({ email, role: 'client' });
 
   // send error
   if (!account) {
@@ -1384,7 +1416,7 @@ const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  // send email to user
+  // generate reset token
   const resetToken = await account.generateResetToken();
 
   res.json({ resetToken });
@@ -1409,15 +1441,24 @@ const resetMyPassword = catchAsyncErrors(async (req, res, next) => {
   // send error
   if (!account) {
     return next(
-      new ServerError$1('This account does not exist on our server', 401)
+      new ServerError$1('This account does not exist on our server', 404)
+    );
+  }
+
+  // don't allow account to use the same password as current one
+  if (await account.validatePassword(password)) {
+    return next(
+      new ServerError$1('Your current and new password cannot be the same', 400)
     );
   }
 
   // update password and default reset token & exp date
-  objectAssign(
-    { password, resetToken: undefined, resetTokenExpirationDate: undefined },
-    account
-  );
+  // didn't use objectAssign because it's strict will not assign falsy values
+  account.resetToken = undefined;
+  account.resetTokenExpirationDate = undefined;
+  account.password = password;
+
+  console.log(account);
 
   // logout all tokens stored before pwd change
   account.tokens = [];
@@ -1425,7 +1466,7 @@ const resetMyPassword = catchAsyncErrors(async (req, res, next) => {
   // save account
   await account.save();
 
-  res.json({ account });
+  res.json(account);
 });
 
 const verifyAccount = catchAsyncErrors(async (req, res, next) => {
@@ -1434,7 +1475,6 @@ const verifyAccount = catchAsyncErrors(async (req, res, next) => {
 
   const hash = hashToken(code);
 
-  console.log('code: ', code, 'hash: ', hash);
   // find account with this code and make sure it has not expired
   const account = await Account.findOne({
     verificationCode: hash,
@@ -1466,35 +1506,21 @@ const verifyAccount = catchAsyncErrors(async (req, res, next) => {
   await account.save();
 
   // respond to client
-  res.json({ message: 'Your account is successfully verfified' });
+  res.json({ message: 'Your account has successfully been verfified' });
 });
 
 const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
   const { account } = req;
 
   // don't send code to email if user is already verified
-  if (account.verfied) {
+  if (account.verified) {
     return next(new ServerError$1('This account is already verified', 400));
   }
 
   // generate verification code
-  const code = await account.generateVerificationCode();
+  const verificationCode = await account.generateVerificationCode();
 
-  const verficationLink = `${req.protocol}://${req.hostname}/api/v1/accounts/verify/${code}`; // https://localhost:80/
-
-  console.log(verficationLink);
-
-  // send email to logged in account
-  const info = await sendEmail({
-    from: 'abdourahmanedbalde@gmail.com',
-    to: account.email,
-    subject: 'Hello',
-    html: `this is your verification code. Please send a request to <a href='${verficationLink}'>${verficationLink}</a>`,
-  });
-
-  console.log(info);
-
-  res.json(code);
+  res.json({ verificationCode });
 });
 
 // SYSTEM ROUTE HANDLERS
@@ -1531,7 +1557,9 @@ const systemSignIn = catchAsyncErrors(async (req, res, next) => {
 
   await account.save();
 
-  setCookie(res, 'Auth-Token', token);
+  // setCookie(res, 'Auth-Token', token);
+
+  res.setHeader('auth_token', token);
 
   res.json(account);
 });
@@ -1539,10 +1567,28 @@ const systemSignIn = catchAsyncErrors(async (req, res, next) => {
 // ADMIN ONLY FUNCTIONS
 const systemAdminCreateAccount = catchAsyncErrors(
   async (req, res, next) => {
+    // don't allow admin accounts creations
+    if (req.body.role === 'admin') {
+      return next(
+        new ServerError$1(
+          'You do not have permission to perform these actions',
+          403
+        )
+      );
+    }
+
     const account = new Account(req.body);
 
-    account.password = process.env.DEFAULT_SYSTEM_PASSWORD;
+    const { firstname, lastname } = account;
 
+    // generate email
+    account.email = generateAccountEmail(firstname, lastname);
+
+    // generate default for account
+    account.password = generateDfPassword(firstname, lastname);
+    // set these accounts as verified (unnecessary anyways)
+    account.verified = true;
+    // save account
     await account.save();
 
     res.status(201).json(account);
@@ -1568,19 +1614,41 @@ const systemAdminAccountUpdate = catchAsyncErrors(
 
 const systemAdminRemoveAccount = catchAsyncErrors(
   async (req, res, next) => {
+    const account = await Account.findById(req.params.accountId);
+
+    if (!account) return next(new ServerError$1('Account not found', 404));
+
+    if (
+      account.role === 'admin' ||
+      (req.account.role === 'sub-admin' &&
+        account.role === 'sub-admin' &&
+        !account._id.equals(req.account.id))
+    )
+      return next(
+        new ServerError$1("You're not allowed to perform these actions", 404)
+      );
+    // delete account
     await Account.deleteOne({ _id: req.params.accountId });
+    // send response
     res.status(204).json();
   }
 );
 
 const systemAdminPasswordChange = catchAsyncErrors(
   async (req, res, next) => {
-    const account = await Account.findById(req.params.accountId);
+    const account = await Account.findOne({
+      _id: req.params.accountId,
+      role: { $in: ['admin', 'sub-admin', 'agent'] },
+    });
     // if account does not exist send err
     if (!account) {
       return next(new ServerError$1('Account not found', 401));
     }
 
+    // if (account.role === 'admin'account._id.equals(req.account.id)) {
+
+    // }
+    // reset password to default and force account to update password
     account.password = process.env.DEFAULT_SYSTEM_PASSWORD || 'DFSP-APP';
 
     await account.save();
@@ -1593,7 +1661,7 @@ const router = express.Router();
 
 const parentRoute = '/accounts';
 
-const systemParentRoute = `system/${parentRoute}`;
+const systemParentRoute = `/system${parentRoute}`;
 
 router.post(`${parentRoute}/signup`, uploader({ files: 1 }).any(), signup);
 
@@ -1652,26 +1720,34 @@ router.patch(
 );
 
 // ADMIN ROUTES
+router.get(
+  `${systemParentRoute}/my-account`,
+  authenticate('system'),
+  getMyAccount
+);
+
 router.post(
   `${systemParentRoute}/create-account`,
   authenticate('system'),
+  allowAccessTo('admin', 'sub-admin'),
   systemAdminCreateAccount
 );
 router.patch(
-  `${systemParentRoute}/update-account`,
+  `${systemParentRoute}/update-account/:accountId`,
   authenticate('system'),
-  allowAccessTo('admin'),
+  allowAccessTo('admin', 'sub-admin'),
   systemAdminAccountUpdate
 );
 router.delete(
-  `${systemParentRoute}/delete-account`,
+  `${systemParentRoute}/delete-account/:accountId`,
   authenticate('system'),
-  allowAccessTo('admin'),
+  allowAccessTo('admin', 'sub-admin'),
   systemAdminRemoveAccount
 );
 router.patch(
-  `${systemParentRoute}/change-password`,
+  `${systemParentRoute}/change-password/:accountId`,
   authenticate('system'),
+  allowAccessTo('admin', 'sub-admin'),
   systemAdminPasswordChange
 );
 
@@ -1687,22 +1763,36 @@ const connectToDb = async () => {
       email: process.env.ADMIN_EMAIL || 'abdourahmanedbalde@gmail.com',
     });
 
+    console.log(admin);
+
     if (!admin) {
+      const firstname = process.env.ADMIN_FIRSTNAME;
+      const lastname = process.env.ADMIN_LASTNAME;
+      const email = process.env.ADMIN_EMAIL;
+      const contacts = ['(716)-314-35-33', '(917)-284-4425'];
+      const password = generateDfPassword(firstname, lastname);
+      const role = process.env.MASTER_ROLE;
+
       const account = new Account({
-        firstname: process.env.ADMIN_FIRSTNAME,
-        lastname: process.env.ADMIN_LASTNAME,
-        email: process.env.ADMIN_EMAIL,
-        contacts: ['(716)-314-35-33', '(917)-284-4425'],
-        password: process.env.ADMIN_PASSWORD,
-        type: process.env.ADMIN_TYPE,
+        firstname,
+        lastname,
+        email,
+        contacts,
+        password,
+        role,
+        ip,
         // year month (begin at 0 march = idx 2) day
         dob: new Date(2000, 2, 17),
       });
 
+      console.log(account);
       await account.save();
+
+      console.log(account);
     }
   } catch (error) {
-    console.log('failed db connection');
+    console.log('Failed db connection');
+    console.log(error);
   }
 };
 
@@ -1747,11 +1837,16 @@ const listen = async (server, port = process.env.PORT || 9090) => {
 
 const server = express();
 
+express();
+
 // connect to mongodb
 connectToDb();
 // setup express middlewares
 setupExpressMiddleware(server);
 // listen on determined port
 listen(server);
+
+// when server is under maintainance shut it down and use maintenance server
+// listen(maintenanceServer);
 
 console.clear();

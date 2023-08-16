@@ -11,6 +11,7 @@ import accountRouter from './routers/account';
 import dotenv from 'dotenv';
 import { unroutable, globalErrorHandler } from './handlers/errors';
 import Account from './schemas/account';
+import { generateDfPassword } from './utils';
 
 // start db connection
 export const connectToDb = async () => {
@@ -24,22 +25,36 @@ export const connectToDb = async () => {
       email: process.env.ADMIN_EMAIL || 'abdourahmanedbalde@gmail.com',
     });
 
+    console.log(admin);
+
     if (!admin) {
+      const firstname = process.env.ADMIN_FIRSTNAME;
+      const lastname = process.env.ADMIN_LASTNAME;
+      const email = process.env.ADMIN_EMAIL;
+      const contacts = ['(716)-314-35-33', '(917)-284-4425'];
+      const password = generateDfPassword(firstname, lastname);
+      const role = process.env.MASTER_ROLE;
+
       const account = new Account({
-        firstname: process.env.ADMIN_FIRSTNAME,
-        lastname: process.env.ADMIN_LASTNAME,
-        email: process.env.ADMIN_EMAIL,
-        contacts: ['(716)-314-35-33', '(917)-284-4425'],
-        password: process.env.ADMIN_PASSWORD,
-        type: process.env.ADMIN_TYPE,
+        firstname,
+        lastname,
+        email,
+        contacts,
+        password,
+        role,
+        ip,
         // year month (begin at 0 march = idx 2) day
         dob: new Date(2000, 2, 17),
       });
 
+      console.log(account);
       await account.save();
+
+      console.log(account);
     }
   } catch (error) {
-    console.log('failed db connection');
+    console.log('Failed db connection');
+    console.log(error);
   }
 };
 
