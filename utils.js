@@ -24,7 +24,7 @@ export const generateJwt = (
   id,
   expiresIn = process.env.JWT_EXPIRATION_TIME || '30d'
 ) => {
-  return sign({ id }, process.env.JWT_SECRET_KEY || 'secret', {
+  return sign({ id }, process.env.JWT_SECRET || 'secret', {
     expiresIn,
   });
 };

@@ -9,6 +9,7 @@ import {
   removeProperty,
   addPropertyImages,
   removePropertyImage,
+  fetchMyProperties,
 } from '../handlers/property';
 import { authenticate, preventUnverifiedAccounts } from '../handlers/auth';
 
@@ -18,7 +19,7 @@ const parentRoute = '/properties';
 const childRoute = `${parentRoute}/:propertyId`;
 
 router
-  .route(`${parentRoute}`)
+  .route(parentRoute)
   .get(fetchProperties)
   .post(
     uploader({ files: 12 }).any(),
@@ -26,6 +27,8 @@ router
     preventUnverifiedAccounts,
     createProperty
   );
+
+router.get(`${parentRoute}/my-properties`, authenticate(), fetchMyProperties);
 
 router
   .route(childRoute)

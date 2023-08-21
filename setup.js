@@ -25,7 +25,7 @@ export const connectToDb = async () => {
       email: process.env.ADMIN_EMAIL || 'abdourahmanedbalde@gmail.com',
     });
 
-    console.log(admin);
+    // console.log(admin);
 
     if (!admin) {
       const firstname = process.env.ADMIN_FIRSTNAME;
@@ -42,7 +42,7 @@ export const connectToDb = async () => {
         contacts,
         password,
         role,
-        ip,
+        // ip,
         // year month (begin at 0 march = idx 2) day
         dob: new Date(2000, 2, 17),
       });
@@ -58,7 +58,7 @@ export const connectToDb = async () => {
   }
 };
 
-export const setupExpressMiddleware = (server) => {
+export const setupExpressMiddleware = server => {
   // setup environment variables
   dotenv.config();
   // parse json

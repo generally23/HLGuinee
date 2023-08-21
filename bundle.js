@@ -168,7 +168,7 @@ const generateJwt = (
   id,
   expiresIn = process.env.JWT_EXPIRATION_TIME || '30d'
 ) => {
-  return jsonwebtoken.sign({ id }, process.env.JWT_SECRET_KEY || 'secret', {
+  return jsonwebtoken.sign({ id }, process.env.JWT_SECRET || 'secret', {
     expiresIn,
   });
 };
@@ -890,7 +890,7 @@ const authenticate = (type = 'client') => {
     console.log(token);
 
     // verify token
-    const decoded = jsonwebtoken.verify(token, process.env.JWT_SECRET_KEY || 'secret');
+    const decoded = jsonwebtoken.verify(token, process.env.JWT_SECRET || 'secret');
 
     if (!decoded) {
       return next(authFailError);
@@ -960,14 +960,11 @@ router$2
   .delete(authenticate(), removeOffer);
 
 const fetchProperties = catchAsyncErrors(async (req, res, next) => {
-  const {
-    search,
-    type,
-    documented,
-    page = 1,
-    limit = 15,
-    location,
-  } = req.query;
+  const lo =
+    req.headers['x-my-location'] && JSON.parse(req.headers['x-my-location']);
+  console.log('Your GPS coords are: ', lo);
+
+  const { search, type, documented, page = 1, limit = 15 } = req.query;
   // object containg search query
   const searchObject = {};
   // only assign search query to search object when present
@@ -1037,6 +1034,10 @@ const fetchProperty = catchAsyncErrors(async (req, res, next) => {
   }
   // send property
   res.json(property);
+});
+
+const fetchMyProperties = catchAsyncErrors(async (req, res, next) => {
+  res.json(await Property.find({ ownerId: req.account.id }));
 });
 
 const updateProperty = catchAsyncErrors(async (req, res, next) => {
@@ -1178,7 +1179,7 @@ const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
 
   // try to find the image to be deleted
   const image = property.imagesNames.find(
-    (imageObject) => imageObject.sourceName === imageName
+    imageObject => imageObject.sourceName === imageName
   );
 
   if (!image) {
@@ -1192,7 +1193,7 @@ const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
 
   // remove image info from db
   property.imagesNames = imagesNames.filter(
-    (imageObject) => imageObject.sourceName !== imageName
+    imageObject => imageObject.sourceName !== imageName
   );
 
   await property.save();
@@ -1206,7 +1207,7 @@ const parentRoute$1 = '/properties';
 const childRoute = `${parentRoute$1}/:propertyId`;
 
 router$1
-  .route(`${parentRoute$1}`)
+  .route(parentRoute$1)
   .get(fetchProperties)
   .post(
     uploader({ files: 12 }).any(),
@@ -1214,6 +1215,8 @@ router$1
     preventUnverifiedAccounts,
     createProperty
   );
+
+router$1.get(`${parentRoute$1}/my-properties`, authenticate(), fetchMyProperties);
 
 router$1
   .route(childRoute)
@@ -1317,7 +1320,7 @@ const signout = catchAsyncErrors(async (req, res, next) => {
 
   // log user out
   account.signedOut = Date.now();
-  account.tokens = account.tokens.filter((t) => t !== token);
+  account.tokens = account.tokens.filter(t => t !== token);
 
   await account.save();
   // remove cookie (not required)
@@ -1649,7 +1652,7 @@ const systemAdminPasswordChange = catchAsyncErrors(
 
     // }
     // reset password to default and force account to update password
-    account.password = process.env.DEFAULT_SYSTEM_PASSWORD || 'DFSP-APP';
+    account.password = generateDfPassword(account.firstname, account.lastname);
 
     await account.save();
 
@@ -1763,7 +1766,7 @@ const connectToDb = async () => {
       email: process.env.ADMIN_EMAIL || 'abdourahmanedbalde@gmail.com',
     });
 
-    console.log(admin);
+    // console.log(admin);
 
     if (!admin) {
       const firstname = process.env.ADMIN_FIRSTNAME;
@@ -1780,7 +1783,7 @@ const connectToDb = async () => {
         contacts,
         password,
         role,
-        ip,
+        // ip,
         // year month (begin at 0 march = idx 2) day
         dob: new Date(2000, 2, 17),
       });
@@ -1796,7 +1799,7 @@ const connectToDb = async () => {
   }
 };
 
-const setupExpressMiddleware = (server) => {
+const setupExpressMiddleware = server => {
   // setup environment variables
   dotenv.config();
   // parse json

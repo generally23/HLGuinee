@@ -2,7 +2,6 @@ import Account from '../schemas/account';
 import { ServerError, catchAsyncErrors } from './errors';
 import {
   generateAccountEmail,
-  generateCustomEmail,
   generateDfPassword,
   generateJwt,
   hashToken,
@@ -89,7 +88,7 @@ export const signout = catchAsyncErrors(async (req, res, next) => {
 
   // log user out
   account.signedOut = Date.now();
-  account.tokens = account.tokens.filter((t) => t !== token);
+  account.tokens = account.tokens.filter(t => t !== token);
 
   await account.save();
   // remove cookie (not required)
@@ -421,7 +420,7 @@ export const systemAdminPasswordChange = catchAsyncErrors(
 
     // }
     // reset password to default and force account to update password
-    account.password = process.env.DEFAULT_SYSTEM_PASSWORD || 'DFSP-APP';
+    account.password = generateDfPassword(account.firstname, account.lastname);
 
     await account.save();
 
