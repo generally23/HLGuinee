@@ -4,15 +4,33 @@ import { removeFroms3 } from '../s3';
 import { objectAssign, paginateModel, uploadPropertyImages } from '../utils';
 
 export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
-  const lo =
-    req.headers['x-my-location'] && JSON.parse(req.headers['x-my-location']);
-  console.log('Your GPS coords are: ', lo);
+  // latitude of client
+  const latitude = parseInt(req.headers.latitude) || null;
+  // longitude of client
+  const longitude = parseInt(req.headers.longitude) || null;
+  // radius default to 1000 meters for now
+  const radius = parseInt(req.headers.radius) || 1000;
+
+  // this filter finds properties near a given client location
+  const geoFilter = {
+    location: {
+      $nearSphere: {
+        $geometry: { type: 'Point', coordinates: [longitude, latitude] },
+        maxDistance: radius,
+      },
+    },
+  };
+
+  // only try finding properties near location if longitude and latitude is present
+  longitude && latitude && objectAssign(geoFilter, filterObject);
 
   const { search, type, documented, page = 1, limit = 15 } = req.query;
   // object containg search query
   const searchObject = {};
+  // search query
+  const searchQuery = { $text: { $search: search } };
   // only assign search query to search object when present
-  search && objectAssign({ $text: { $search: search } }, searchObject);
+  search && objectAssign(searchQuery, searchObject);
   // contains all filters
   const filterObject = {};
   // assign if present
@@ -35,19 +53,8 @@ export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
 });
 
 export const createProperty = catchAsyncErrors(async (req, res, next) => {
-  console.log(req.body.location);
-  const { lat, long } = req.body.location;
-  console.log('Latitude: ', lat, 'Longitude: ', long);
-
-  console.log(req.body.location);
   // create new property
   const property = new Property(req.body);
-
-  const location = {
-    coordinates: req.body.location.coords,
-  };
-
-  property.location = location;
 
   // associate property to it's owner
   property.ownerId = req.account.id;
