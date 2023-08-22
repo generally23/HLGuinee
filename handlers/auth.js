@@ -15,7 +15,7 @@ export const authenticate = (type = 'client') => {
     console.log(token);
 
     // verify token
-    const decoded = verify(token, process.env.JWT_SECRET_KEY || 'secret');
+    const decoded = verify(token, process.env.JWT_SECRET || 'secret');
 
     if (!decoded) {
       return next(authFailError);

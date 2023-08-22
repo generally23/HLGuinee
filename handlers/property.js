@@ -4,14 +4,11 @@ import { removeFroms3 } from '../s3';
 import { objectAssign, paginateModel, uploadPropertyImages } from '../utils';
 
 export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
-  const {
-    search,
-    type,
-    documented,
-    page = 1,
-    limit = 15,
-    location,
-  } = req.query;
+  const lo =
+    req.headers['x-my-location'] && JSON.parse(req.headers['x-my-location']);
+  console.log('Your GPS coords are: ', lo);
+
+  const { search, type, documented, page = 1, limit = 15 } = req.query;
   // object containg search query
   const searchObject = {};
   // only assign search query to search object when present
@@ -81,6 +78,10 @@ export const fetchProperty = catchAsyncErrors(async (req, res, next) => {
   }
   // send property
   res.json(property);
+});
+
+export const fetchMyProperties = catchAsyncErrors(async (req, res, next) => {
+  res.json(await Property.find({ ownerId: req.account.id }));
 });
 
 export const updateProperty = catchAsyncErrors(async (req, res, next) => {
@@ -222,7 +223,7 @@ export const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
 
   // try to find the image to be deleted
   const image = property.imagesNames.find(
-    (imageObject) => imageObject.sourceName === imageName
+    imageObject => imageObject.sourceName === imageName
   );
 
   if (!image) {
@@ -236,7 +237,7 @@ export const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
 
   // remove image info from db
   property.imagesNames = imagesNames.filter(
-    (imageObject) => imageObject.sourceName !== imageName
+    imageObject => imageObject.sourceName !== imageName
   );
 
   await property.save();
