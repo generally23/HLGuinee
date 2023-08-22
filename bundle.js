@@ -90,7 +90,7 @@ const unroutable = (req, res, next) => {
   next(new ServerError$1(`The route ${req.originalUrl} is not found`, 404));
 };
 
-const catchAsyncErrors = (f) => {
+const catchAsyncErrors = f => {
   return (req, res, next) => f(req, res, next).catch(next);
 };
 
@@ -161,7 +161,7 @@ const objectAssign = (source, target) => {
 
 // delete properties from a source object
 const deleteProps = (src, ...props) => {
-  props.forEach((prop) => delete src[prop]);
+  props.forEach(prop => delete src[prop]);
 };
 
 const generateJwt = (
@@ -173,7 +173,7 @@ const generateJwt = (
   });
 };
 
-const uploader = (limits) => {
+const uploader = limits => {
   limits = {
     fileSize: parseInt(process.env.MAX_IMAGE_SIZE) || 5000000,
     files: 1,
@@ -195,7 +195,7 @@ const uploader = (limits) => {
   return multer({ storage, limits, fileFilter });
 };
 
-const isFullHd = async (file) => {
+const isFullHd = async file => {
   if (!file) return;
   // get image dimensions
   const { width, height } = await sharp(file.buffer).metadata();
@@ -268,7 +268,7 @@ const uploadAvatar = async (file, account, next) => {
     // upload files to AWS S3
     await uploadToS3(avatarFiles);
 
-    account.avatarNames = avatarFiles.map((avatar) => avatar.originalname);
+    account.avatarNames = avatarFiles.map(avatar => avatar.originalname);
 
     await account.save();
   }
@@ -284,7 +284,9 @@ const uploadPropertyImages = async (images, property, next) => {
 
     // send error if images are not clear (hd)
     if (!isHighRes) {
-      return next(new ServerError$1('Please upload high resolution images', 400));
+      return next(
+        new ServerError$1('Please upload high resolution images', 400)
+      );
     }
 
     // convert property image to webp to optimize images for web use
@@ -307,7 +309,7 @@ const uploadPropertyImages = async (images, property, next) => {
     // save image and its different versions info to db
     const imageObject = {
       sourceName: webpImage.originalname,
-      names: imageAndCopies.map((img) => img.originalname),
+      names: imageAndCopies.map(img => img.originalname),
     };
     // add imageObject to imageNames list
     property.imagesNames.push(imageObject);
@@ -317,7 +319,7 @@ const uploadPropertyImages = async (images, property, next) => {
 };
 
 // create pages array out of a number of pages
-const createPages = (numPages) => {
+const createPages = numPages => {
   let firstPage = 1;
   const pages = [];
   for (let i = firstPage; i <= numPages; i++) {
@@ -378,13 +380,13 @@ const paginateModel = async (
       .skip(skip)
       .limit(limit);
 
-    populates.forEach((population) => query.populate(population));
+    populates.forEach(population => query.populate(population));
 
     docs = await query;
   } else {
     query = Model.find(filterObject).sort(sortStr).skip(skip).limit(limit);
 
-    populates.forEach((population) => query.populate(population));
+    populates.forEach(population => query.populate(population));
 
     docs = await query.exec();
   }
@@ -407,7 +409,7 @@ const paginateModel = async (
   };
 };
 
-const hashToken = (raw) => {
+const hashToken = raw => {
   return crypto.createHash('sha256').update(raw).digest('hex');
 };
 
@@ -423,47 +425,6 @@ const generateAccountEmail = (fn = '', ln = '') => {
 const generateDfPassword = (fn = '', ln = '') => {
   return `PASS-${fn.slice(0, 2)}${ln.slice(0, 2)}`;
 };
-
-// SCHEMA
-const offerSchema = new mongoose.Schema(
-  {
-    offererId: {
-      type: mongoose.Schema.Types.ObjectId,
-      required: [true, 'ID of offerer is required'],
-    },
-    offerPrice: {
-      type: Number,
-      required: [true, 'Offer price is required'],
-    },
-    paymentType: {
-      type: String,
-      enum: ['cash', 'check', 'transfer'],
-      required: [true, 'A payment type for an offer is required'],
-    },
-    propertyId: {
-      type: mongoose.Schema.Types.ObjectId,
-      required: [true, 'ID of property receiving offer is required'],
-    },
-  },
-  { timestamps: true, toJSON: { virtuals: true } }
-);
-
-// virtuals
-offerSchema.virtual('offerer', {
-  ref: 'Account',
-  localField: 'offererId',
-  foreignField: '_id',
-  justOne: true,
-});
-
-offerSchema.virtual('property', {
-  ref: 'Property',
-  localField: 'propertyId',
-  foreignField: '_id',
-  justOne: true,
-});
-
-const Offer = mongoose.model('Offer', offerSchema);
 
 const imageSchema = new mongoose.Schema({
   sourceName: {
@@ -483,6 +444,13 @@ const locationSchema = new mongoose.Schema({
   coordinates: {
     type: [Number],
     required: [true],
+    validator: {
+      validate(value) {
+        console.log(value);
+        return value.length === 2;
+      },
+      message: 'Coordinates need a Longitude and a Latitude',
+    },
   },
 });
 
@@ -491,22 +459,22 @@ const propertySchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      required: [true],
+      required: [true, 'A property must be of type land or house'],
       enum: ['house', 'land'],
       lowercase: true,
     },
     ownerId: {
-      required: [true],
+      required: [true, 'A property has to have an owner'],
       unique: [true],
       type: mongoose.Schema.Types.ObjectId,
     },
     price: {
       type: Number,
-      required: [true],
+      required: [true, 'A property needs a price'],
     },
     location: {
       type: locationSchema,
-      required: [true],
+      required: [true, 'A property must have gps coordinates'],
     },
 
     documented: {
@@ -516,7 +484,7 @@ const propertySchema = new mongoose.Schema(
     dimension: {},
     title: {
       type: String,
-      required: [true],
+      required: [true, 'A property needs a title'],
     },
     story: {
       type: String,
@@ -525,8 +493,24 @@ const propertySchema = new mongoose.Schema(
       type: String,
       enum: ['available', 'pending', 'sold'],
     },
+    yearBuilt: {
+      type: Number,
+      // minium property built year
+      min: [1800, 'A property built year must be from year 1800'],
+      // don't allow property buil year to be in the future
+      max: [
+        new Date().getFullYear(),
+        `A property built year can't be in the future`,
+      ],
+      required: [
+        function () {
+          return this.type === 'house';
+        },
+        'A house property must have a year built',
+      ],
+    },
 
-    tags: [String],
+    tags: String,
   },
   { timestamps: true, toJSON: { virtuals: true } }
 );
@@ -552,10 +536,10 @@ propertySchema.virtual('images').get(function () {
   const { imagesNames } = property;
   const baseURI = process.env.CLOUDFRONT_URL;
 
-  return imagesNames.map((image) => {
+  return imagesNames.map(image => {
     return {
       src: `${baseURI}/${image.sourceName}`,
-      srcset: image.names.map((name) => `${baseURI}/${name}`),
+      srcset: image.names.map(name => `${baseURI}/${name}`),
     };
   });
 });
@@ -566,409 +550,34 @@ propertySchema.virtual('images').get(function () {
 
 const Property = mongoose.model('Property', propertySchema);
 
-// location = { type: 'Point', coordinates: [79, 88] }
+const fetchProperties = catchAsyncErrors(async (req, res, next) => {
+  // latitude of client
+  const latitude = parseInt(req.headers.latitude) || null;
+  // longitude of client
+  const longitude = parseInt(req.headers.longitude) || null;
+  // radius default to 1000 meters for now
+  const radius = parseInt(req.headers.radius) || 1000;
 
-const createOffer = catchAsyncErrors(async (req, res, next) => {
-  // only create offer if property exist
-  const property = await Property.findById(req.params.propertyId);
-  const accountId = req.account.id;
-
-  console.log('Account ID: ', accountId);
-
-  if (!property) {
-    return next(
-      new ServerError$1('Cannot create offer for an unexisting property', 404)
-    );
-  }
-
-  // don't allow property owner to create offer on their property
-  if (property.ownerId.equals(accountId)) {
-    return next(
-      new ServerError$1('You cannot make offers on your own properties', 400)
-    );
-  }
-
-  const potentialOffer = await Offer.findOne({
-    propertyId: property.id,
-    offererId: accountId,
-  });
-
-  // cannot make offers to the same property 2x
-  if (potentialOffer) {
-    return next(
-      new ServerError$1("You've already sent an offer for this property", 400)
-    );
-  }
-
-  // create offer
-  const offer = new Offer(req.body);
-  // tie offer to creator
-  offer.offererId = req.account.id;
-  // tie offer to property
-  offer.propertyId = property.id;
-  // save offer
-  await offer.save();
-  // send created offer
-  res.status(201).json(offer);
-});
-
-const getOffers = catchAsyncErrors(async (req, res, next) => {
-  const offers = await Offer.find({ propertyId: req.params.propertyId })
-    .populate('offerer')
-    .populate('property');
-  res.json(offers);
-});
-
-const getOffer = catchAsyncErrors(async (req, res, next) => {
-  // find offer
-  const offer = await Offer.findById(req.params.offerId)
-    .populate('offerer')
-    .populate('property');
-
-  // send an error if offer does not exist
-  if (!offer) {
-    return next(
-      new ServerError$1('This offer does not exist on our server', 404)
-    );
-  }
-  // send offer
-  res.json(offer);
-});
-
-const updateOffer = catchAsyncErrors(async (req, res, next) => {
-  // don't allow anyone to update offerer
-  delete req.body.offererId;
-
-  // find offer
-  const offer = await Offer.findById(req.params.offerId);
-
-  // send error if offer is not found
-  if (!offer) {
-    return next(
-      new ServerError$1('This offer does not exist on our server', 404)
-    );
-  }
-
-  // only offer owner and admin allowed to remove offer
-  if (!offer.offererId.equals(req.account.id)) {
-    return next(
-      new ServerError$1(
-        'You do not have enough credentials to perform this action',
-        403
-      )
-    );
-  }
-
-  objectAssign(req.body, offer);
-
-  await offer.save();
-
-  res.json(offer);
-});
-
-const removeOffer = catchAsyncErrors(async (req, res, next) => {
-  // find offer
-  const offer = await Offer.findById(req.params.offerId);
-
-  // error if offer not found
-  if (!offer) {
-    return next(
-      new ServerError$1('This offer does not exist on our server', 404)
-    );
-  }
-
-  // only offer owner and admin allowed to remove offer
-  if (!offer.offererId.equals(req.account.id)) {
-    return next(
-      new ServerError$1(
-        'You do not have enough credentials to perform this action',
-        403
-      )
-    );
-  }
-
-  // delete offer
-  await Offer.deleteOne({ _id: offer.id });
-
-  res.status(204).json();
-});
-
-// SCHEMA
-const accountSchema = new mongoose.Schema(
-  {
-    firstname: {
-      type: String,
-      minlength: [4, 'Firstname cannot be less than 5 characetrs'],
-      maxlength: [15, 'Firstname cannot exceed 15 characters'],
-      required: [true, 'Firstname is required'],
-      lowercase: true,
-    },
-    lastname: {
-      type: String,
-      minlength: [2, 'Lastname cannot be less than 2 characetrs'],
-      maxlength: [10, 'Lastname cannot exceed 10 characters'],
-      required: [true, 'Lastname is required'],
-      lowercase: true,
-    },
-    email: {
-      type: String,
-      required: [true, 'Email is required'],
-      unique: [true, 'Email already exist'],
-      lowercase: true,
-      validate: {
-        validator(value) {
-          return emailValidator.validate(value);
-        },
-        message: 'Invalid email address',
+  // this filter finds properties near a given client location
+  const geoFilter = {
+    location: {
+      $nearSphere: {
+        $geometry: { type: 'Point', coordinates: [longitude, latitude] },
+        maxDistance: radius,
       },
     },
-    contacts: {
-      type: [{ type: String, required: true }],
-      validate: [
-        (numbers) => numbers.length <= 3,
-        'Phone numbers max out at 3',
-      ],
-    },
-    role: {
-      type: String,
-      enum: ['admin', 'sub-admin', 'agent', 'client'],
-      required: [true],
-      default: 'client',
-    },
-    password: {
-      type: String,
-      required: [true, 'Password is required'],
-    },
-    avatarNames: [String],
-    dob: {
-      type: Date,
-    },
-    tokens: [String],
-    resetToken: {
-      type: String,
-    },
-
-    resetTokenExpirationDate: Date,
-
-    ip: {
-      type: String,
-    },
-    signedIn: {
-      type: Date,
-    },
-    signedOut: {
-      type: Date,
-    },
-    verified: {
-      type: Boolean,
-      required: [true, 'Verified is required'],
-      default: false,
-    },
-    verificationCode: String,
-
-    verificationCodeExpirationDate: Date,
-  },
-  {
-    timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true },
-  }
-);
-
-// virtuals
-accountSchema.virtual('avatarUrls').get(function () {
-  return this.avatarNames.map(
-    (name) => `${process.env.CLOUDFRONT_URL}/${name}`
-  );
-});
-
-/** HOOKS */
-
-// hash password before saving it
-accountSchema.pre('save', async function (next) {
-  // user account
-  const account = this;
-  // move to next midware if password hasn't changed
-  if (!account.isModified('password')) return next();
-  // min and max length required because pwd is being modified to hash pre save, and hash is long
-  // pwd minlength
-  const minlength = 8;
-  // pwd max length
-  const maxlength = 32;
-
-  const { password } = account;
-
-  console.log(password);
-
-  if (password < minlength || password > maxlength) {
-    return next(
-      new ServerError('Your password is either too short or too long', 400)
-    );
-  }
-
-  // hash pwd
-  const hash = await argon.hash(password);
-
-  // assign hash to account
-  account.password = hash;
-
-  // move to the next middleware
-  next();
-});
-
-/** HOOKS END **/
-
-/** METHODS **/
-
-accountSchema.methods.validatePassword = async function (password = '') {
-  const account = this;
-
-  return await argon.verify(account.password, password);
-};
-
-accountSchema.methods.generateResetToken = async function () {
-  const account = this;
-
-  // create reset token string
-  const resetToken = crypto.randomBytes(40).toString('hex');
-
-  // append hashed token to account
-  account.resetToken = hashToken(resetToken);
-
-  // set expiration date for the token
-  account.resetTokenExpirationDate = Date.now() + 15 * 60 * 1000;
-
-  await account.save();
-
-  return resetToken;
-};
-
-accountSchema.methods.generateVerificationCode = async function () {
-  const account = this;
-
-  // create reset token string
-  const code = crypto.randomBytes(40).toString('hex');
-
-  // append hashed token to account
-  account.verificationCode = hashToken(code);
-
-  // set expiration date for the token
-  account.verificationCodeExpirationDate = Date.now() + 15 * 60 * 1000;
-
-  await account.save();
-
-  return code;
-};
-
-accountSchema.methods.toJSON = function () {
-  // account clone
-  const account = this.toObject();
-  // remove props from user object
-  deleteProps(
-    account,
-    'password',
-    '__v',
-    'reset_token',
-    'reset_token_expiration_date',
-    'tokens'
-  );
-  // return value will be sent to client
-  return account;
-};
-
-const Account = mongoose.model('Account', accountSchema);
-
-const authenticate = (type = 'client') => {
-  return catchAsyncErrors(async (req, res, next) => {
-    let query;
-
-    const authFailError = new ServerError$1('You are not authenticated', 401);
-    // get token
-    const token = req.headers['authorization'];
-
-    // req.cookies.AUTH_TOKEN;
-    console.log(token);
-
-    // verify token
-    const decoded = jsonwebtoken.verify(token, process.env.JWT_SECRET || 'secret');
-
-    if (!decoded) {
-      return next(authFailError);
-    }
-    // system auth
-    if (type === 'system')
-      query = { tokens: token, role: { $in: ['admin', 'sub-admin', 'agent'] } };
-    // client auth
-    else if (type === 'client') query = { tokens: token, role: 'client' };
-    // unknown auth
-    else return next(authFailError);
-
-    // find account that has role as client
-    const account = await Account.findOne(query);
-
-    if (!account) return next(authFailError);
-
-    req.account = account;
-    req.token = token;
-
-    return next();
-  });
-};
-
-const allowAccessTo = (...roles) => {
-  return (req, res, next) => {
-    if (!roles.includes(req.account.role)) {
-      return next(
-        new ServerError$1(
-          'You do not have enough credentials to access or perform these actions',
-          403
-        )
-      );
-    }
-    next();
   };
-};
 
-const preventUnverifiedAccounts = catchAsyncErrors(
-  async (req, res, next) => {
-    const { account } = req;
-
-    if (!account.verified) {
-      return next(
-        new ServerError$1(
-          'Please verify your account to access this ressource',
-          403
-        )
-      );
-    }
-
-    next();
-  }
-);
-
-const router$2 = express.Router({ mergeParams: true });
-
-router$2
-  .route('/')
-  .get(getOffers)
-  .post(authenticate(), preventUnverifiedAccounts, createOffer);
-
-router$2
-  .route('/:offerId')
-  .get(getOffer)
-  .patch(authenticate(), updateOffer)
-  .delete(authenticate(), removeOffer);
-
-const fetchProperties = catchAsyncErrors(async (req, res, next) => {
-  const lo =
-    req.headers['x-my-location'] && JSON.parse(req.headers['x-my-location']);
-  console.log('Your GPS coords are: ', lo);
+  // only try finding properties near location if longitude and latitude is present
+  longitude && latitude && objectAssign(geoFilter, filterObject);
 
   const { search, type, documented, page = 1, limit = 15 } = req.query;
   // object containg search query
   const searchObject = {};
+  // search query
+  const searchQuery = { $text: { $search: search } };
   // only assign search query to search object when present
-  search && objectAssign({ $text: { $search: search } }, searchObject);
+  search && objectAssign(searchQuery, searchObject);
   // contains all filters
   const filterObject = {};
   // assign if present
@@ -991,19 +600,8 @@ const fetchProperties = catchAsyncErrors(async (req, res, next) => {
 });
 
 const createProperty = catchAsyncErrors(async (req, res, next) => {
-  console.log(req.body.location);
-  const { lat, long } = req.body.location;
-  console.log('Latitude: ', lat, 'Longitude: ', long);
-
-  console.log(req.body.location);
   // create new property
   const property = new Property(req.body);
-
-  const location = {
-    coordinates: req.body.location.coords,
-  };
-
-  property.location = location;
 
   // associate property to it's owner
   property.ownerId = req.account.id;
@@ -1201,6 +799,255 @@ const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
   res.json();
 });
 
+// SCHEMA
+const accountSchema = new mongoose.Schema(
+  {
+    firstname: {
+      type: String,
+      minlength: [4, 'Firstname cannot be less than 5 characetrs'],
+      maxlength: [15, 'Firstname cannot exceed 15 characters'],
+      required: [true, 'Firstname is required'],
+      lowercase: true,
+    },
+    lastname: {
+      type: String,
+      minlength: [2, 'Lastname cannot be less than 2 characetrs'],
+      maxlength: [10, 'Lastname cannot exceed 10 characters'],
+      required: [true, 'Lastname is required'],
+      lowercase: true,
+    },
+    email: {
+      type: String,
+      required: [true, 'Email is required'],
+      unique: [true, 'Email already exist'],
+      lowercase: true,
+      validate: {
+        validator(value) {
+          return emailValidator.validate(value);
+        },
+        message: 'Invalid email address',
+      },
+    },
+    contacts: {
+      type: [{ type: String, required: true }],
+      validate: [numbers => numbers.length <= 3, 'Phone numbers max out at 3'],
+    },
+    role: {
+      type: String,
+      enum: ['admin', 'sub-admin', 'agent', 'client'],
+      required: [true],
+      default: 'client',
+    },
+    password: {
+      type: String,
+      required: [true, 'Password is required'],
+    },
+    avatarNames: [String],
+    dob: {
+      type: Date,
+    },
+    tokens: [String],
+    resetToken: {
+      type: String,
+    },
+
+    resetTokenExpirationDate: Date,
+
+    ip: {
+      type: String,
+    },
+    signedIn: {
+      type: Date,
+    },
+    signedOut: {
+      type: Date,
+    },
+    verified: {
+      type: Boolean,
+      required: [true, 'Verified is required'],
+      default: false,
+    },
+    verificationCode: String,
+
+    verificationCodeExpirationDate: Date,
+  },
+  {
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
+  }
+);
+
+// virtuals
+accountSchema.virtual('avatarUrls').get(function () {
+  return this.avatarNames.map(name => `${process.env.CLOUDFRONT_URL}/${name}`);
+});
+
+/** HOOKS */
+
+// hash password before saving it
+accountSchema.pre('save', async function (next) {
+  // user account
+  const account = this;
+  // move to next midware if password hasn't changed
+  if (!account.isModified('password')) return next();
+  // min and max length required because pwd is being modified to hash pre save, and hash is long
+  // pwd minlength
+  const minlength = 8;
+  // pwd max length
+  const maxlength = 32;
+
+  const { password } = account;
+
+  console.log(password);
+
+  if (password < minlength || password > maxlength) {
+    return next(
+      new ServerError('Your password is either too short or too long', 400)
+    );
+  }
+
+  // hash pwd
+  const hash = await argon.hash(password);
+
+  // assign hash to account
+  account.password = hash;
+
+  // move to the next middleware
+  next();
+});
+
+/** HOOKS END **/
+
+/** METHODS **/
+
+accountSchema.methods.validatePassword = async function (password = '') {
+  const account = this;
+
+  return await argon.verify(account.password, password);
+};
+
+accountSchema.methods.generateResetToken = async function () {
+  const account = this;
+
+  // create reset token string
+  const resetToken = crypto.randomBytes(40).toString('hex');
+
+  // append hashed token to account
+  account.resetToken = hashToken(resetToken);
+
+  // set expiration date for the token
+  account.resetTokenExpirationDate = Date.now() + 15 * 60 * 1000;
+
+  await account.save();
+
+  return resetToken;
+};
+
+accountSchema.methods.generateVerificationCode = async function () {
+  const account = this;
+
+  // create reset token string
+  const code = crypto.randomBytes(40).toString('hex');
+
+  // append hashed token to account
+  account.verificationCode = hashToken(code);
+
+  // set expiration date for the token
+  account.verificationCodeExpirationDate = Date.now() + 15 * 60 * 1000;
+
+  await account.save();
+
+  return code;
+};
+
+accountSchema.methods.toJSON = function () {
+  // account clone
+  const account = this.toObject();
+  // remove props from user object
+  deleteProps(
+    account,
+    'password',
+    '__v',
+    'reset_token',
+    'reset_token_expiration_date',
+    'tokens'
+  );
+  // return value will be sent to client
+  return account;
+};
+
+const Account = mongoose.model('Account', accountSchema);
+
+const authenticate = (type = 'client') => {
+  return catchAsyncErrors(async (req, res, next) => {
+    let query;
+
+    const authFailError = new ServerError$1('You are not authenticated', 401);
+    // get token
+    const token = req.headers['authorization'];
+
+    // req.cookies.AUTH_TOKEN;
+    console.log(token);
+
+    // verify token
+    const decoded = jsonwebtoken.verify(
+      token,
+      process.env.JWT_SECRET || 'secret'
+    );
+
+    if (!decoded) {
+      return next(authFailError);
+    }
+    // system auth
+    if (type === 'system')
+      query = { tokens: token, role: { $in: ['admin', 'sub-admin', 'agent'] } };
+    // client auth
+    else if (type === 'client') query = { tokens: token, role: 'client' };
+    // unknown auth
+    else return next(authFailError);
+
+    // find account that has role as client
+    const account = await Account.findOne(query);
+
+    if (!account) return next(authFailError);
+
+    req.account = account;
+    req.token = token;
+
+    return next();
+  });
+};
+
+const allowAccessTo = (...roles) => {
+  return (req, res, next) => {
+    if (!roles.includes(req.account.role)) {
+      return next(
+        new ServerError$1(
+          'You do not have enough credentials to access or perform these actions',
+          403
+        )
+      );
+    }
+    next();
+  };
+};
+
+const preventUnverifiedAccounts = catchAsyncErrors(async (req, res, next) => {
+  const { account } = req;
+
+  if (!account.verified) {
+    return next(
+      new ServerError$1(
+        'Please verify your account to access this ressource',
+        403
+      )
+    );
+  }
+
+  next();
+});
+
 const router$1 = express.Router();
 
 const parentRoute$1 = '/properties';
@@ -1216,7 +1063,11 @@ router$1
     createProperty
   );
 
-router$1.get(`${parentRoute$1}/my-properties`, authenticate(), fetchMyProperties);
+router$1.get(
+  `${parentRoute$1}/my-properties`,
+  authenticate(),
+  fetchMyProperties
+);
 
 router$1
   .route(childRoute)
@@ -1236,8 +1087,6 @@ router$1.delete(
   authenticate(),
   removePropertyImage
 );
-
-router$1.use(`${childRoute}/offers`, router$2);
 
 // SYSTEM SPECIFIC ROUTES
 router$1
@@ -1340,7 +1189,10 @@ const changeMyPassword = catchAsyncErrors(async (req, res, next) => {
 
   if (currentPassword === password)
     return next(
-      new ServerError$1('Your current and new password cannnot be the same', 400)
+      new ServerError$1(
+        'Your current and new password cannnot be the same',
+        400
+      )
     );
 
   // validate pwd
@@ -1568,97 +1420,89 @@ const systemSignIn = catchAsyncErrors(async (req, res, next) => {
 });
 
 // ADMIN ONLY FUNCTIONS
-const systemAdminCreateAccount = catchAsyncErrors(
-  async (req, res, next) => {
-    // don't allow admin accounts creations
-    if (req.body.role === 'admin') {
-      return next(
-        new ServerError$1(
-          'You do not have permission to perform these actions',
-          403
-        )
-      );
-    }
-
-    const account = new Account(req.body);
-
-    const { firstname, lastname } = account;
-
-    // generate email
-    account.email = generateAccountEmail(firstname, lastname);
-
-    // generate default for account
-    account.password = generateDfPassword(firstname, lastname);
-    // set these accounts as verified (unnecessary anyways)
-    account.verified = true;
-    // save account
-    await account.save();
-
-    res.status(201).json(account);
+const systemAdminCreateAccount = catchAsyncErrors(async (req, res, next) => {
+  // don't allow admin accounts creations
+  if (req.body.role === 'admin') {
+    return next(
+      new ServerError$1(
+        'You do not have permission to perform these actions',
+        403
+      )
+    );
   }
-);
 
-const systemAdminAccountUpdate = catchAsyncErrors(
-  async (req, res, next) => {
-    const { firstname, lastname, contacts } = req.body;
-    const account = await Account.findById(req.params.accountId);
-    // if account does not exist send err
-    if (!account) {
-      return next(new ServerError$1('Account not found', 401));
-    }
-    // update properties
-    objectAssign({ firstname, lastname }, account);
+  const account = new Account(req.body);
 
-    await account.save();
+  const { firstname, lastname } = account;
 
-    res.json(account);
+  // generate email
+  account.email = generateAccountEmail(firstname, lastname);
+
+  // generate default for account
+  account.password = generateDfPassword(firstname, lastname);
+  // set these accounts as verified (unnecessary anyways)
+  account.verified = true;
+  // save account
+  await account.save();
+
+  res.status(201).json(account);
+});
+
+const systemAdminAccountUpdate = catchAsyncErrors(async (req, res, next) => {
+  const { firstname, lastname, contacts } = req.body;
+  const account = await Account.findById(req.params.accountId);
+  // if account does not exist send err
+  if (!account) {
+    return next(new ServerError$1('Account not found', 401));
   }
-);
+  // update properties
+  objectAssign({ firstname, lastname }, account);
 
-const systemAdminRemoveAccount = catchAsyncErrors(
-  async (req, res, next) => {
-    const account = await Account.findById(req.params.accountId);
+  await account.save();
 
-    if (!account) return next(new ServerError$1('Account not found', 404));
+  res.json(account);
+});
 
-    if (
-      account.role === 'admin' ||
-      (req.account.role === 'sub-admin' &&
-        account.role === 'sub-admin' &&
-        !account._id.equals(req.account.id))
-    )
-      return next(
-        new ServerError$1("You're not allowed to perform these actions", 404)
-      );
-    // delete account
-    await Account.deleteOne({ _id: req.params.accountId });
-    // send response
-    res.status(204).json();
+const systemAdminRemoveAccount = catchAsyncErrors(async (req, res, next) => {
+  const account = await Account.findById(req.params.accountId);
+
+  if (!account) return next(new ServerError$1('Account not found', 404));
+
+  if (
+    account.role === 'admin' ||
+    (req.account.role === 'sub-admin' &&
+      account.role === 'sub-admin' &&
+      !account._id.equals(req.account.id))
+  )
+    return next(
+      new ServerError$1("You're not allowed to perform these actions", 404)
+    );
+  // delete account
+  await Account.deleteOne({ _id: req.params.accountId });
+  // send response
+  res.status(204).json();
+});
+
+const systemAdminPasswordChange = catchAsyncErrors(async (req, res, next) => {
+  const account = await Account.findOne({
+    _id: req.params.accountId,
+    role: { $in: ['admin', 'sub-admin', 'agent'] },
+  });
+  // if account does not exist send err
+  if (!account) {
+    return next(new ServerError$1('Account not found', 401));
   }
-);
 
-const systemAdminPasswordChange = catchAsyncErrors(
-  async (req, res, next) => {
-    const account = await Account.findOne({
-      _id: req.params.accountId,
-      role: { $in: ['admin', 'sub-admin', 'agent'] },
-    });
-    // if account does not exist send err
-    if (!account) {
-      return next(new ServerError$1('Account not found', 401));
-    }
+  // if (account.role === 'admin'account._id.equals(req.account.id)) {
 
-    // if (account.role === 'admin'account._id.equals(req.account.id)) {
+  // }
+  // reset password to default and force account to update password
+  account.password = generateDfPassword(account.firstname, account.lastname);
 
-    // }
-    // reset password to default and force account to update password
-    account.password = generateDfPassword(account.firstname, account.lastname);
+  await account.save();
 
-    await account.save();
-
-    res.json();
-  }
-);
+  res.json();
+});
 
 const router = express.Router();
 

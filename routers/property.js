@@ -1,6 +1,5 @@
 import express from 'express';
 import { uploader } from '../utils';
-import offerRouter from './offer';
 import {
   fetchProperties,
   fetchProperty,
@@ -48,8 +47,6 @@ router.delete(
   authenticate(),
   removePropertyImage
 );
-
-router.use(`${childRoute}/offers`, offerRouter);
 
 // SYSTEM SPECIFIC ROUTES
 router

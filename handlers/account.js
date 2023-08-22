@@ -10,7 +10,6 @@ import {
   uploadAvatar,
 } from '../utils';
 import Property from '../schemas/property';
-import Offer from '../schemas/offer';
 import { removeFroms3 } from '../s3';
 
 // REGULAR USER HANDLERS
