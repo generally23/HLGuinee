@@ -17,6 +17,8 @@ import {
   systemSignIn,
   verifyAccount,
   sendVerficationCode,
+  getAuthenticationStatus,
+  getMyProperties,
 } from '../handlers/account';
 import { uploader } from '../utils';
 
@@ -26,21 +28,23 @@ const parentRoute = '/accounts';
 
 const systemParentRoute = `/system${parentRoute}`;
 
-router.post(`${parentRoute}/signup`, uploader({ files: 1 }).any(), signup);
-
 /** AUTHENTICATED */
 
+// logout
 router.post(`${parentRoute}/signout`, authenticate(), signout);
 
+// fetch my account
 router.get(`${parentRoute}/my-account`, authenticate(), getMyAccount);
 
 /** NOT AUTHENTICATED */
+
+router.post(`${parentRoute}/signup`, uploader().single('avatar'), signup);
 
 router.post(`${parentRoute}/signin`, signin);
 
 router.post(`${parentRoute}/forgot-my-password`, forgotMyPassword);
 
-router.patch(`${parentRoute}/reset-password/:resetToken`, resetMyPassword);
+router.patch(`${parentRoute}/reset-my-password/:resetToken`, resetMyPassword);
 
 /** AUTHENTICATED */
 
@@ -54,13 +58,6 @@ router.patch(
   `${parentRoute}/update-my-account`,
   authenticate(),
   updateMyAccount
-);
-
-router.delete(
-  `${parentRoute}/delete-my-account`,
-  authenticate(),
-  allowAccessTo('client'),
-  deleteMyAccount
 );
 
 // verify account

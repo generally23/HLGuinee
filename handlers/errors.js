@@ -18,7 +18,7 @@ const unroutable = (req, res, next) => {
   next(new ServerError(`The route ${req.originalUrl} is not found`, 404));
 };
 
-const catchAsyncErrors = (f) => {
+const catchAsyncErrors = f => {
   return (req, res, next) => f(req, res, next).catch(next);
 };
 
@@ -27,6 +27,8 @@ const globalErrorHandler = (err, req, res, next) => {
 
   // const { ENVIRONMENT = 'dev' } = process.env;
   const { ENVIRONMENT = 'dev' } = process.env;
+
+  console.log(ENVIRONMENT);
 
   if (ENVIRONMENT === 'dev') {
     // known error
@@ -57,7 +59,7 @@ const globalErrorHandler = (err, req, res, next) => {
       const details = {};
 
       for (let key in error.errors) {
-        details[key] = error.errors[key].properties.message;
+        details[key] = error?.errors[key]?.properties?.message;
       }
 
       error = new ServerError('Validation error', 400, details);

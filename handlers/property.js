@@ -1,28 +1,30 @@
 import { ServerError, catchAsyncErrors } from './errors';
 import Property from '../schemas/property';
 import { removeFroms3 } from '../s3';
-import { objectAssign, paginateModel, uploadPropertyImages } from '../utils';
+import {
+  objectAssign,
+  paginateModel,
+  parseStringToBoolean,
+  uploadPropertyImages,
+} from '../utils';
 
 export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
+  console.log(req.query.price);
   // latitude of client
-  const latitude = parseInt(req.headers.latitude) || null;
+  const latitude = Number(req.headers.latitude);
   // longitude of client
-  const longitude = parseInt(req.headers.longitude) || null;
+  const longitude = Number(req.headers.longitude);
   // radius default to 1000 meters for now
-  const radius = parseInt(req.headers.radius) || 1000;
-
+  const radius = Number(req.headers.radius) || 10000;
   // this filter finds properties near a given client location
   const geoFilter = {
     location: {
       $nearSphere: {
         $geometry: { type: 'Point', coordinates: [longitude, latitude] },
-        maxDistance: radius,
+        // $maxDistance: radius,
       },
     },
   };
-
-  // only try finding properties near location if longitude and latitude is present
-  longitude && latitude && objectAssign(geoFilter, filterObject);
 
   const { search, type, documented, page = 1, limit = 15 } = req.query;
   // object containg search query
@@ -33,13 +35,19 @@ export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
   search && objectAssign(searchQuery, searchObject);
   // contains all filters
   const filterObject = {};
+  // only try finding properties near location if longitude and latitude is present
+  longitude && latitude && objectAssign(geoFilter, filterObject);
+
   // assign if present
   objectAssign({ type, documented }, filterObject);
+
   // contains sorting
   let { sortBy } = req.query;
+
   // contains pagination info
   const pagination = { page, limit };
   // paginate data
+
   const data = await paginateModel(
     Property,
     searchObject,
@@ -53,6 +61,9 @@ export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
 });
 
 export const createProperty = catchAsyncErrors(async (req, res, next) => {
+  // parsed boolean strings since multer won't
+  parseStringToBoolean(req.body, 'cuisine', 'pool', 'fenced');
+
   // create new property
   const property = new Property(req.body);
 
@@ -67,6 +78,8 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
 
   // upload property images to S3 bucket
   await uploadPropertyImages(images, property, next);
+
+  console.log('still ran');
 
   // send success response
   res.status(201).json(property);
@@ -134,14 +147,18 @@ export const removeProperty = catchAsyncErrors(async (req, res, next) => {
   // only property owner and admin allowed accounts can delete
   const allowedAccounts = ['admin', 'sub-admin', 'agent'];
 
-  if (
-    !property.ownerId.equals(req.account.id) ||
-    !allowedAccounts.includes(req.account.role)
-  ) {
+  const sameAccount = property.ownerId.equals(req.account.id);
+  const isAllowed = allowedAccounts.includes(req.account.role);
+
+  console.log('Same account: ', property.ownerId.equals(req.account.id));
+
+  console.log('Allowed: ', allowedAccounts.includes(req.account.role));
+
+  if (!sameAccount || (!sameAccount && !isAllowed)) {
     return next(
       new ServerError(
         'You do not have enough credentials to perform this action',
-        404
+        403
       )
     );
   }
@@ -181,7 +198,7 @@ export const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
 
   console.log(uploadedImages);
   // maximum number of images allowed for a single property
-  const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 12;
+  const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 40;
 
   if (
     propertyImagesLength >= maxImagesLength ||
@@ -218,7 +235,7 @@ export const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
   }
 
   // allow only owner and admin to delete image
-  console.log(property.ownerId.equals(account.id));
+
   if (!property.ownerId.equals(account.id)) {
     return next(
       new ServerError('You are not allowed to perform this action', 403)
@@ -249,5 +266,5 @@ export const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
 
   await property.save();
 
-  res.json();
+  res.status(204).json();
 });

@@ -6,8 +6,10 @@ import cors from 'cors';
 import compress from 'compression';
 import cookieParser from 'cookie-parser';
 // import { default: helmet } from "helmet";
-import propertyRouter from './routers/property';
-import accountRouter from './routers/account';
+
+import SERVER_ROUTER from './routers/Webserver';
+import API_ROUTER from './routers/Api';
+
 import dotenv from 'dotenv';
 import { unroutable, globalErrorHandler } from './handlers/errors';
 import Account from './schemas/account';
@@ -60,33 +62,51 @@ export const connectToDb = async () => {
 
 export const setupExpressMiddleware = server => {
   // setup environment variables
-  dotenv.config();
+  dotenv.config({});
+
   // parse json
   server.use(express.json());
+
+  // parse form data
+  server.use(express.urlencoded({ extended: true }));
+
   // setup cors
-  server.use(cors());
+  // server.use(cors());
+  server.use(
+    cors({
+      origin: 'http://localhost:3000',
+      credentials: true,
+    })
+  );
+
   // parse cookies
   server.use(cookieParser());
+
   // setup compression
   server.use(compress());
+
   // setup helmet to protect server
   server.use(helmet());
 
   // serve static files
-  server.use(express.static(resolve(__dirname, 'Public')));
+  server.use(express.static(resolve(__dirname, 'public')));
 
-  // server main routes
-  server.use('/api/v1', accountRouter);
-  server.use('/api/v1', propertyRouter);
+  // server.get('api./subdomain', (req, res) => res.send('Test working...'));
 
-  // handles all unmacthing routes
+  // WEB SERVER ROUTES
+  server.use('/', SERVER_ROUTER);
+
+  // API ROUTES
+  server.use('/api/v1', API_ROUTER);
+
+  // Handle 404 Not found
   server.all('*', unroutable);
 
-  // error handler
+  // Global Error handler
   server.use(globalErrorHandler);
 };
 
-// port listeners
+// Port listener
 export const listen = async (server, port = process.env.PORT || 9090) => {
   try {
     await server.listen(port, console.log);

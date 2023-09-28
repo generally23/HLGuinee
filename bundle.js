@@ -10,12 +10,18 @@ var cookieParser = require('cookie-parser');
 var multer = require('multer');
 var sharp = require('sharp');
 var clientS3 = require('@aws-sdk/client-s3');
-var uid = require('uniqid');
+var uniqid = require('uniqid');
 var jsonwebtoken = require('jsonwebtoken');
 var crypto = require('crypto');
+var nodemailer = require('nodemailer');
 var argon = require('argon2');
 var emailValidator = require('email-validator');
+require('axios');
 var dotenv = require('dotenv');
+
+const router$3 = express.Router();
+
+router$3.get('/', (req, res) => res.send('Welcome to my webserver'));
 
 const createS3Instance = () => {
   // AWS CONFIGURATION
@@ -72,7 +78,7 @@ const removeFroms3 = async (fileNames = []) => {
   }
 };
 
-let ServerError$1 = class ServerError extends Error {
+class ServerError extends Error {
   constructor(
     message = 'Internal server error',
     statusCode = 500,
@@ -84,10 +90,10 @@ let ServerError$1 = class ServerError extends Error {
     this.details = details;
     Error.captureStackTrace(this, this.constructor);
   }
-};
+}
 
 const unroutable = (req, res, next) => {
-  next(new ServerError$1(`The route ${req.originalUrl} is not found`, 404));
+  next(new ServerError(`The route ${req.originalUrl} is not found`, 404));
 };
 
 const catchAsyncErrors = f => {
@@ -99,6 +105,8 @@ const globalErrorHandler = (err, req, res, next) => {
 
   // const { ENVIRONMENT = 'dev' } = process.env;
   const { ENVIRONMENT = 'dev' } = process.env;
+
+  console.log(ENVIRONMENT);
 
   if (ENVIRONMENT === 'dev') {
     // known error
@@ -116,12 +124,12 @@ const globalErrorHandler = (err, req, res, next) => {
       const { keyValue } = error;
       let message = '';
       for (let key in keyValue) message += `wrong ${key}! `;
-      error = new ServerError$1(message, 400);
+      error = new ServerError(message, 400);
     }
 
     // cast errors
     if (err.name === 'CastError') {
-      error = new ServerError$1(`Invalid ${error.path}: ${error.value}`, 400);
+      error = new ServerError(`Invalid ${error.path}: ${error.value}`, 400);
     }
 
     // validation errors
@@ -129,15 +137,15 @@ const globalErrorHandler = (err, req, res, next) => {
       const details = {};
 
       for (let key in error.errors) {
-        details[key] = error.errors[key].properties.message;
+        details[key] = error?.errors[key]?.properties?.message;
       }
 
-      error = new ServerError$1('Validation error', 400, details);
+      error = new ServerError('Validation error', 400, details);
     }
 
     // multer errors
     if (err instanceof multer.MulterError) {
-      error = new ServerError$1(err.message, 400);
+      error = new ServerError(err.message, 400);
     }
 
     if (error.operational) {
@@ -174,6 +182,7 @@ const generateJwt = (
 };
 
 const uploader = limits => {
+  //console.log(process.env.MAX_IMAGE_SIZE);
   limits = {
     fileSize: parseInt(process.env.MAX_IMAGE_SIZE) || 5000000,
     files: 1,
@@ -199,17 +208,22 @@ const isFullHd = async file => {
   if (!file) return;
   // get image dimensions
   const { width, height } = await sharp(file.buffer).metadata();
+
   // if width & height >= FHD image passes test
-  if (width >= 1920 && height >= 1080) return true;
-  // image fails test
-  return false;
+  // if (width >= 1920 && height >= 1080) return true;
+
+  // if width or height does is not FHD+ test fails
+  if (width < 1920 || height < 1080) return { passed: false };
+
+  // test passes
+  return { passed: true, width, height };
 };
 
 const createFileCopies = async (source, dimensions = []) => {
   if (!source) return;
 
   const copies = [];
-  const all = [source];
+  const all = [];
 
   for (let dimension of dimensions) {
     const copy = { ...source };
@@ -224,6 +238,8 @@ const createFileCopies = async (source, dimensions = []) => {
     all.push(copy);
   }
 
+  all.push(source);
+
   return { source, copies, all };
 };
 
@@ -235,10 +251,8 @@ const convertToWebp = async (file, quality = 100) => {
     // convert to webp
     const converted = await sharp(file.buffer).webp({ quality }).toBuffer();
 
-    console.log('file sizes: ', file.size, converted.byteLength);
     // only save converted if it's size is less than original file
     if (converted.byteLength < file.size) {
-      console.log('converted');
       file.buffer = converted;
       file.mimetype = 'images/webp';
     }
@@ -256,14 +270,15 @@ const uploadAvatar = async (file, account, next) => {
 
     // send error if image is low quality < FHD
     if (!isAccepted) {
-      return next(new ServerError$1('Please upload a high quality image', 400));
+      return next(new ServerError('Please upload a high quality image', 400));
     }
     // convert original file to webp
     const webpAvatar = await convertToWebp(file);
 
     // make copies of account avatar/profile in the given dimensions
-    const copyOutput = await createFileCopies(webpAvatar, [200, 400, 800]);
-    const avatarFiles = copyOutput.all;
+    const copyOutput = await createFileCopies(webpAvatar, [250, 500, 800]);
+    // only save the copies not the original
+    const avatarFiles = copyOutput.copies;
 
     // upload files to AWS S3
     await uploadToS3(avatarFiles);
@@ -277,16 +292,18 @@ const uploadAvatar = async (file, account, next) => {
 const uploadPropertyImages = async (images, property, next) => {
   for (let image of images) {
     // rename property images
-    image.originalname = `property-img-${uid()}`;
+    image.originalname = `property-img-${uniqid()}`;
 
     // make sure images match our criterias
-    const isHighRes = await isFullHd(image);
+    const resolution = await isFullHd(image);
+
+    const isHighRes = resolution.passed;
+
+    console.log(isHighRes);
 
     // send error if images are not clear (hd)
     if (!isHighRes) {
-      return next(
-        new ServerError$1('Please upload high resolution images', 400)
-      );
+      return next(new ServerError('Please upload high resolution images', 400));
     }
 
     // convert property image to webp to optimize images for web use
@@ -299,6 +316,9 @@ const uploadPropertyImages = async (images, property, next) => {
 
     // create smaller image versions from original image uploaded by client
     const copyOutput = await createFileCopies(webpImage, dimensions);
+
+    // rename original image to add width for responsive images
+    webpImage.originalname = `${image.originalname}-${resolution.width}`;
 
     // original image + smaller versions of image
     const imageAndCopies = copyOutput.all;
@@ -333,11 +353,10 @@ const paginateModel = async (
   searchObject = {},
   filterObject = {},
   sortStr = '',
-  pagingInfo = { page: 1, limit: 15 },
+  /* paging info */ { page, limit },
   // all these must be popolated
   ...populates
 ) => {
-  console.log(searchObject, filterObject, sortStr, pagingInfo);
   // variables
   let docs;
   let docsCount;
@@ -345,16 +364,18 @@ const paginateModel = async (
   // find documents length
   const searchObjectLength = Object.values(searchObject).length;
 
-  console.log(searchObjectLength);
-
   if (searchObjectLength) {
     query = Model.countDocuments(searchObject).find(filterObject);
     docsCount = await query.countDocuments();
-  } else docsCount = await Model.countDocuments(filterObject);
+  } else {
+    // we didn't use countDocuments here because it doesn't support $nearSphere
+    const documents = await Model.find(filterObject);
+    docsCount = documents.length;
+  }
 
   // get paging info
-  let page = parseInt(pagingInfo.page);
-  let limit = parseInt(pagingInfo.limit);
+  page = Number(page);
+  limit = Number(limit);
 
   // sanitize user input
   if (isNaN(page) || page < 1) page = 1;
@@ -388,11 +409,12 @@ const paginateModel = async (
 
     populates.forEach(population => query.populate(population));
 
-    docs = await query.exec();
+    docs = await query;
   }
 
   const docsLength = docs.length;
 
+  console.log('Total Results: ', docsCount);
   return {
     page,
     pageCount: pages,
@@ -409,8 +431,26 @@ const paginateModel = async (
   };
 };
 
+const sendEmail = async content => {
+  const transporter = nodemailer.createTransport({
+    host: 'smtp-relay.brevo.com',
+    port: 587,
+    auth: {
+      user: 'rallygene0@gmail.com',
+      pass: 'FvtRrDY5WV9hTPJn',
+    },
+  });
+
+  return await transporter.sendMail(content);
+};
+
 const hashToken = raw => {
   return crypto.createHash('sha256').update(raw).digest('hex');
+};
+
+const setCookie = (res, name, value, options = {}) => {
+  options = { maxAge: 30 * 24 * 60 * 60 * 1000, httpOnly: true, ...options };
+  res.cookie(name, value, options);
 };
 
 const generateAccountEmail = (fn = '', ln = '') => {
@@ -424,6 +464,15 @@ const generateAccountEmail = (fn = '', ln = '') => {
 
 const generateDfPassword = (fn = '', ln = '') => {
   return `PASS-${fn.slice(0, 2)}${ln.slice(0, 2)}`;
+};
+
+const parseStringToBoolean = (source = {}, ...properties) => {
+  for (let property of properties) {
+    if (source[property] === 'true' || source[property] === '')
+      source[property] = true;
+    if (source[property] === 'false') source[property] = false;
+  }
+  return source;
 };
 
 const imageSchema = new mongoose.Schema({
@@ -454,6 +503,12 @@ const locationSchema = new mongoose.Schema({
   },
 });
 
+// helper functions
+// this function return true if type === house
+
+// house validator
+const validator = value => value !== 'house';
+
 // SCHEMA
 const propertySchema = new mongoose.Schema(
   {
@@ -464,34 +519,177 @@ const propertySchema = new mongoose.Schema(
       lowercase: true,
     },
     ownerId: {
-      required: [true, 'A property has to have an owner'],
-      unique: [true],
+      required: [true, 'A property must have an owner'],
       type: mongoose.Schema.Types.ObjectId,
     },
     price: {
       type: Number,
       required: [true, 'A property needs a price'],
+      min: [5000000, 'A property price cannot be less than this amount'],
+      // price must not be past billions
+      max: [900000000000, 'A property price cannot exceed this amount'],
     },
     location: {
       type: locationSchema,
       required: [true, 'A property must have gps coordinates'],
     },
-
-    documented: {
-      type: Boolean,
-    },
+    // documented: {
+    //   type: Boolean,
+    // },
     imagesNames: [imageSchema],
-    dimension: {},
+    // area
+    area: {
+      type: Number,
+      required: [true, 'Area is required'],
+    },
+
+    areaBuilt: {
+      type: Number,
+      required: [
+        function () {
+          this.type === 'house';
+        },
+        'Area built is required',
+      ],
+      default: function () {
+        return this.area;
+      },
+      validate: {
+        validator,
+        message: 'area built is only for a house',
+      },
+    },
+    // area unit
+    areaUnit: {
+      type: String,
+      required: [true, 'Area unit is required'],
+      default: 'square meter',
+    },
+
     title: {
       type: String,
+      max: [60, 'A title cannot exceed 60 characters'],
       required: [true, 'A property needs a title'],
     },
-    story: {
+    // description
+    description: {
       type: String,
     },
     status: {
       type: String,
       enum: ['available', 'pending', 'sold'],
+    },
+    published: {
+      type: Boolean,
+      required: [true, 'A property must have a published field'],
+      default: false,
+    },
+    rooms: {
+      type: Number,
+      required: [
+        function () {
+          return this.type === 'house';
+        },
+        'A house must have rooms',
+      ],
+      validate: {
+        validator,
+        message: 'Rooms are only for a house',
+      },
+    },
+    // bathrooms: {
+    //   type: Number,
+    //   validate: {
+    //     validator,
+    //     message: 'Bathrooms are only for a house',
+    //   },
+    // },
+    externalBathrooms: {
+      type: Number,
+      default: 0,
+      required: [
+        function () {
+          return this.type === 'house';
+        },
+        'External bathrooms is required',
+      ],
+      validate: {
+        validator,
+        message: 'External Bathrooms are only for a house',
+      },
+    },
+
+    internalBathrooms: {
+      type: Number,
+      default: 0,
+      required: [
+        function () {
+          return this.type === 'house';
+        },
+        'Internal bathrooms is required',
+      ],
+      validate: {
+        validator,
+        message: 'Internal Bathrooms are only for a house',
+      },
+    },
+    cuisine: {
+      type: Boolean,
+      default: false,
+      required: [
+        function () {
+          return this.type === 'house';
+        },
+        'Cuisine is required',
+      ],
+      validate: {
+        validator,
+        message: 'Cuisine is only for houses',
+      },
+    },
+    garages: {
+      type: Number,
+      default: 0,
+      required: [
+        function () {
+          return this.type === 'house';
+        },
+        'Garage is required',
+      ],
+      validate: {
+        validator,
+        message: 'Garage is only for a house',
+      },
+    },
+    // sale a manger
+    diningRooms: {
+      type: Number,
+      default: 0,
+      required: [
+        function () {
+          return this.type === 'house';
+        },
+        'Dining room is required',
+      ],
+      validate: {
+        validator,
+        message: 'Dining rooms are only for a house',
+      },
+    },
+    // salon
+    livingRooms: {
+      type: Number,
+      default: 0,
+      required: [
+        function () {
+          return this.type === 'house';
+        },
+        'Living room is required',
+      ],
+      validate: {
+        validator,
+        message: 'Living rooms are only for a house',
+      },
     },
     yearBuilt: {
       type: Number,
@@ -509,7 +707,27 @@ const propertySchema = new mongoose.Schema(
         'A house property must have a year built',
       ],
     },
+    // cloturé
+    fenced: {
+      type: Boolean,
+      default: false,
+      required: [true, 'Fenced is required'],
+    },
 
+    pool: {
+      type: Boolean,
+      default: false,
+      required: [
+        function () {
+          return this.type === 'house';
+        },
+        'Pool is required',
+      ],
+      validate: {
+        validator,
+        message: 'Pool is only for a house',
+      },
+    },
     tags: String,
   },
   { timestamps: true, toJSON: { virtuals: true } }
@@ -519,8 +737,11 @@ const propertySchema = new mongoose.Schema(
 propertySchema.index({
   title: 'text',
   story: 'text',
-  location: '2dsphere',
   tags: 'text',
+});
+
+propertySchema.index({
+  location: '2dsphere',
 });
 
 // virtuals
@@ -550,26 +771,27 @@ propertySchema.virtual('images').get(function () {
 
 const Property = mongoose.model('Property', propertySchema);
 
-const fetchProperties = catchAsyncErrors(async (req, res, next) => {
-  // latitude of client
-  const latitude = parseInt(req.headers.latitude) || null;
-  // longitude of client
-  const longitude = parseInt(req.headers.longitude) || null;
-  // radius default to 1000 meters for now
-  const radius = parseInt(req.headers.radius) || 1000;
+Property.on('index', e => {
+  console.log(e);
+});
 
+const fetchProperties = catchAsyncErrors(async (req, res, next) => {
+  console.log(req.query.price);
+  // latitude of client
+  const latitude = Number(req.headers.latitude);
+  // longitude of client
+  const longitude = Number(req.headers.longitude);
+  // radius default to 1000 meters for now
+  Number(req.headers.radius) || 10000;
   // this filter finds properties near a given client location
   const geoFilter = {
     location: {
       $nearSphere: {
         $geometry: { type: 'Point', coordinates: [longitude, latitude] },
-        maxDistance: radius,
+        // $maxDistance: radius,
       },
     },
   };
-
-  // only try finding properties near location if longitude and latitude is present
-  longitude && latitude && objectAssign(geoFilter, filterObject);
 
   const { search, type, documented, page = 1, limit = 15 } = req.query;
   // object containg search query
@@ -580,13 +802,19 @@ const fetchProperties = catchAsyncErrors(async (req, res, next) => {
   search && objectAssign(searchQuery, searchObject);
   // contains all filters
   const filterObject = {};
+  // only try finding properties near location if longitude and latitude is present
+  longitude && latitude && objectAssign(geoFilter, filterObject);
+
   // assign if present
   objectAssign({ type, documented }, filterObject);
+
   // contains sorting
   let { sortBy } = req.query;
+
   // contains pagination info
   const pagination = { page, limit };
   // paginate data
+
   const data = await paginateModel(
     Property,
     searchObject,
@@ -600,6 +828,9 @@ const fetchProperties = catchAsyncErrors(async (req, res, next) => {
 });
 
 const createProperty = catchAsyncErrors(async (req, res, next) => {
+  // parsed boolean strings since multer won't
+  parseStringToBoolean(req.body, 'cuisine', 'pool', 'fenced');
+
   // create new property
   const property = new Property(req.body);
 
@@ -615,6 +846,8 @@ const createProperty = catchAsyncErrors(async (req, res, next) => {
   // upload property images to S3 bucket
   await uploadPropertyImages(images, property, next);
 
+  console.log('still ran');
+
   // send success response
   res.status(201).json(property);
 });
@@ -627,7 +860,7 @@ const fetchProperty = catchAsyncErrors(async (req, res, next) => {
   // send an error if property does not exist
   if (!property) {
     return next(
-      new ServerError$1('This property does not exist on our server', 404)
+      new ServerError('This property does not exist on our server', 404)
     );
   }
   // send property
@@ -647,13 +880,13 @@ const updateProperty = catchAsyncErrors(async (req, res, next) => {
   if (!property) {
     // error
     return next(
-      new ServerError$1('This property does not exist on our server', 404)
+      new ServerError('This property does not exist on our server', 404)
     );
   }
 
   if (!property.ownerId.equals(req.account.id)) {
     return next(
-      new ServerError$1(
+      new ServerError(
         'You do not have enough credentials to perform this action',
         404
       )
@@ -674,21 +907,25 @@ const removeProperty = catchAsyncErrors(async (req, res, next) => {
   // send error if property doesn't exist
   if (!property) {
     return next(
-      new ServerError$1('This property does not exist on our server', 404)
+      new ServerError('This property does not exist on our server', 404)
     );
   }
 
   // only property owner and admin allowed accounts can delete
   const allowedAccounts = ['admin', 'sub-admin', 'agent'];
 
-  if (
-    !property.ownerId.equals(req.account.id) ||
-    !allowedAccounts.includes(req.account.role)
-  ) {
+  const sameAccount = property.ownerId.equals(req.account.id);
+  const isAllowed = allowedAccounts.includes(req.account.role);
+
+  console.log('Same account: ', property.ownerId.equals(req.account.id));
+
+  console.log('Allowed: ', allowedAccounts.includes(req.account.role));
+
+  if (!sameAccount || (!sameAccount && !isAllowed)) {
     return next(
-      new ServerError$1(
+      new ServerError(
         'You do not have enough credentials to perform this action',
-        404
+        403
       )
     );
   }
@@ -717,7 +954,7 @@ const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
   // send an error if property is not found
   if (!property) {
     return next(
-      new ServerError$1('This property does not exist on our server', 404)
+      new ServerError('This property does not exist on our server', 404)
     );
   }
 
@@ -728,14 +965,14 @@ const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
 
   console.log(uploadedImages);
   // maximum number of images allowed for a single property
-  const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 12;
+  const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 40;
 
   if (
     propertyImagesLength >= maxImagesLength ||
     propertyImagesLength + uploadedImages.length > maxImagesLength
   ) {
     return next(
-      new ServerError$1(
+      new ServerError(
         `A property cannot have more than ${maxImagesLength} images`,
         400
       )
@@ -760,15 +997,15 @@ const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
   // send an error if property is not found
   if (!property) {
     return next(
-      new ServerError$1('This property does not exist on our server', 404)
+      new ServerError('This property does not exist on our server', 404)
     );
   }
 
   // allow only owner and admin to delete image
-  console.log(property.ownerId.equals(account.id));
+
   if (!property.ownerId.equals(account.id)) {
     return next(
-      new ServerError$1('You are not allowed to perform this action', 403)
+      new ServerError('You are not allowed to perform this action', 403)
     );
   }
 
@@ -782,7 +1019,7 @@ const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
 
   if (!image) {
     return next(
-      new ServerError$1('This image does not exist on our server', 404)
+      new ServerError('This image does not exist on our server', 404)
     );
   }
 
@@ -796,7 +1033,7 @@ const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
 
   await property.save();
 
-  res.json();
+  res.status(204).json();
 });
 
 // SCHEMA
@@ -804,7 +1041,7 @@ const accountSchema = new mongoose.Schema(
   {
     firstname: {
       type: String,
-      minlength: [4, 'Firstname cannot be less than 5 characetrs'],
+      minlength: [4, 'Firstname cannot be less than 4 characetrs'],
       maxlength: [15, 'Firstname cannot exceed 15 characters'],
       required: [true, 'Firstname is required'],
       lowercase: true,
@@ -835,7 +1072,7 @@ const accountSchema = new mongoose.Schema(
     role: {
       type: String,
       enum: ['admin', 'sub-admin', 'agent', 'client'],
-      required: [true],
+      required: [true, 'An must have a role'],
       default: 'client',
     },
     password: {
@@ -891,17 +1128,16 @@ accountSchema.pre('save', async function (next) {
   const account = this;
   // move to next midware if password hasn't changed
   if (!account.isModified('password')) return next();
-  // min and max length required because pwd is being modified to hash pre save, and hash is long
-  // pwd minlength
-  const minlength = 8;
   // pwd max length
   const maxlength = 32;
 
   const { password } = account;
 
+  const passwordLength = password.length;
+
   console.log(password);
 
-  if (password < minlength || password > maxlength) {
+  if (password < passwordLength || passwordLength > maxlength) {
     return next(
       new ServerError('Your password is either too short or too long', 400)
     );
@@ -983,35 +1219,34 @@ const authenticate = (type = 'client') => {
   return catchAsyncErrors(async (req, res, next) => {
     let query;
 
-    const authFailError = new ServerError$1('You are not authenticated', 401);
+    const authFailError = new ServerError('You are not authenticated', 401);
     // get token
-    const token = req.headers['authorization'];
+    const token = req.cookies.token || req.headers['authorization'];
 
     // req.cookies.AUTH_TOKEN;
     console.log(token);
 
     // verify token
-    const decoded = jsonwebtoken.verify(
-      token,
-      process.env.JWT_SECRET || 'secret'
-    );
-
-    if (!decoded) {
+    try {
+      jsonwebtoken.verify(token, process.env.JWT_SECRET || 'secret');
+    } catch (error) {
       return next(authFailError);
     }
-    // system auth
-    if (type === 'system')
-      query = { tokens: token, role: { $in: ['admin', 'sub-admin', 'agent'] } };
-    // client auth
-    else if (type === 'client') query = { tokens: token, role: 'client' };
-    // unknown auth
-    else return next(authFailError);
+
+    // query will use system auth if type = 'system' & client auth otherwise
+    query =
+      type === 'system'
+        ? { tokens: token, role: { $in: ['admin', 'sub-admin', 'agent'] } }
+        : { tokens: token, role: 'client' };
 
     // find account that has role as client
     const account = await Account.findOne(query);
 
-    if (!account) return next(authFailError);
+    if (!account) {
+      return next(authFailError);
+    }
 
+    req.authenticated = true;
     req.account = account;
     req.token = token;
 
@@ -1023,7 +1258,7 @@ const allowAccessTo = (...roles) => {
   return (req, res, next) => {
     if (!roles.includes(req.account.role)) {
       return next(
-        new ServerError$1(
+        new ServerError(
           'You do not have enough credentials to access or perform these actions',
           403
         )
@@ -1033,28 +1268,30 @@ const allowAccessTo = (...roles) => {
   };
 };
 
-const preventUnverifiedAccounts = catchAsyncErrors(async (req, res, next) => {
-  const { account } = req;
+const preventUnverifiedAccounts = catchAsyncErrors(
+  async (req, res, next) => {
+    const { account } = req;
 
-  if (!account.verified) {
-    return next(
-      new ServerError$1(
-        'Please verify your account to access this ressource',
-        403
-      )
-    );
+    if (!account.verified) {
+      return next(
+        new ServerError(
+          'Please verify your account to access this ressource',
+          403
+        )
+      );
+    }
+
+    next();
   }
+);
 
-  next();
-});
+const router$2 = express.Router();
 
-const router$1 = express.Router();
+const properties = '/properties';
+const propertyRoute = `${properties}/:propertyId`;
 
-const parentRoute$1 = '/properties';
-const childRoute = `${parentRoute$1}/:propertyId`;
-
-router$1
-  .route(parentRoute$1)
+router$2
+  .route(properties)
   .get(fetchProperties)
   .post(
     uploader({ files: 12 }).any(),
@@ -1063,43 +1300,46 @@ router$1
     createProperty
   );
 
-router$1.get(
-  `${parentRoute$1}/my-properties`,
-  authenticate(),
-  fetchMyProperties
-);
+router$2.get(`${properties}/my-properties`, authenticate(), fetchMyProperties);
 
-router$1
-  .route(childRoute)
+router$2
+  .route(propertyRoute)
   .get(fetchProperty)
   .patch(authenticate(), updateProperty)
   .delete(authenticate(), removeProperty);
 
-router$1.post(
-  `${childRoute}/images`,
+// add images to property
+router$2.post(
+  `${propertyRoute}/images`,
   authenticate(),
   uploader({ files: 12 }).any(),
   addPropertyImages
 );
 
-router$1.delete(
-  `${childRoute}/images/:imageName`,
+// remove a property image
+router$2.delete(
+  `${propertyRoute}/images/:imageName`,
   authenticate(),
   removePropertyImage
 );
 
 // SYSTEM SPECIFIC ROUTES
-router$1
+router$2
   .route('system/properties/:propertyId')
   .patch(authenticate('system'), updateProperty)
   .delete(authenticate('system'), removeProperty);
 
 // REGULAR USER HANDLERS
 const signup = catchAsyncErrors(async (req, res, next) => {
+  console.clear();
+
+  console.log('Body:', req.body);
+  console.log('File: ', req.file);
+
   // make sure this account does not exist before we create one
   if (await Account.findOne({ email: req.body.email })) {
     return next(
-      new ServerError$1('This account already exist. Please Log In!', 400)
+      new ServerError('This account already exist. Please Log In!', 400)
     );
   }
   // create new account
@@ -1118,13 +1358,14 @@ const signup = catchAsyncErrors(async (req, res, next) => {
   await account.save();
 
   // get account avatar if uploaded
-  const avatar = req.files ? req.files[0] : undefined;
+  const avatar = req.file;
 
   // proccess and upload avatar to s3
   await uploadAvatar(avatar, account, next);
 
-  // setCookie(res, 'Auth-Token', token);
-  res.setHeader('auth_token', token);
+  res.setHeader('token', token);
+
+  setCookie(res, 'token', token);
 
   res.json(account);
 });
@@ -1136,14 +1377,14 @@ const signin = catchAsyncErrors(async (req, res, next) => {
 
   if (!account) {
     // account does not exist err
-    return next(new ServerError$1('Account not found', 401));
+    return next(new ServerError('Account not found', 401));
   }
 
   // verify password
   const isPasswordValid = await account.validatePassword(password);
 
   if (!isPasswordValid) {
-    return next(new ServerError$1('Invalid password', 401));
+    return next(new ServerError('Invalid password', 401));
   }
 
   // store ip and last time user logged in
@@ -1152,14 +1393,22 @@ const signin = catchAsyncErrors(async (req, res, next) => {
   // regular users have long expiration tokens while admins and agents' expire in 1d
   const token = generateJwt(account.id);
 
+  // don't allow more than specified login
+  const tokensLength = account.tokens.length;
+
+  // if logged in token + this login token > specified
+  // wipe old tokens to logout previous devices
+  if (tokensLength + 1 > Number(process.env.MAX_LOGIN_TOKENS) || 10) {
+    account.tokens = [];
+  }
   // store token
   account.tokens.push(token);
 
   await account.save();
 
-  //setCookie(res, 'Auth-Token', token);
+  setCookie(res, 'token', token);
 
-  res.setHeader('auth_token', token);
+  res.setHeader('token', token);
 
   res.json(account);
 });
@@ -1167,15 +1416,16 @@ const signin = catchAsyncErrors(async (req, res, next) => {
 const signout = catchAsyncErrors(async (req, res, next) => {
   const { account, token } = req;
 
-  // log user out
+  // log user out from server
   account.signedOut = Date.now();
   account.tokens = account.tokens.filter(t => t !== token);
 
   await account.save();
-  // remove cookie (not required)
-  // setCookie(res, 'Auth-Token', undefined, { maxAge: 0 });
 
-  res.status(204).json();
+  // remove cookie (not required)
+  setCookie(res, 'token', undefined, { maxAge: 0 });
+
+  res.status(204).json({});
 });
 
 const changeMyPassword = catchAsyncErrors(async (req, res, next) => {
@@ -1189,10 +1439,7 @@ const changeMyPassword = catchAsyncErrors(async (req, res, next) => {
 
   if (currentPassword === password)
     return next(
-      new ServerError$1(
-        'Your current and new password cannnot be the same',
-        400
-      )
+      new ServerError('Your current and new password cannnot be the same', 400)
     );
 
   // validate pwd
@@ -1200,14 +1447,21 @@ const changeMyPassword = catchAsyncErrors(async (req, res, next) => {
 
   // send error if not valid
   if (!isPasswordValid) {
-    return next(new ServerError$1('Invalid password', 401));
+    return next(new ServerError('Invalid password', 401));
   }
 
   // update pwd
   objectAssign({ password }, account);
 
   // update tokens
-  account.tokens = [];
+  const token = generateJwt(account.id);
+
+  account.tokens = [token];
+
+  // sign account in
+  setCookie(res, 'token', token);
+
+  res.setHeader('token', token);
 
   // save
   await account.save();
@@ -1236,29 +1490,6 @@ const updateMyAccount = catchAsyncErrors(async (req, res, next) => {
   res.json(account);
 });
 
-const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
-  // alongside delete offers and properties created by this account
-  // id of logged in account
-  const accountId = req.account.id;
-  // find all properties owned by this account
-  const myProperties = await Property.find({ ownerId: accountId }).lean();
-  // remove images of all properties made by this account from s3 bucket
-  for (let property of myProperties) {
-    const images = property.imagesNames;
-    for (let image of images) {
-      await removeFroms3(image.names);
-    }
-  }
-  // delete properties owned by this account
-  await Property.deleteMany({ ownerId: accountId });
-  // delete all offers made by this account
-  await Offer.deleteMany({ offererId: accountId });
-  // finally delete account
-  await Account.deleteOne({ _id: req.account.id });
-  // respond to client
-  res.status(204).json();
-});
-
 const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
   const { email } = req.body;
 
@@ -1267,14 +1498,38 @@ const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
   // send error
   if (!account) {
     return next(
-      new ServerError$1('This account does not exist on our server', 401)
+      new ServerError('This account does not exist on our server', 401)
     );
   }
 
   // generate reset token
   const resetToken = await account.generateResetToken();
 
-  res.json({ resetToken });
+  // construct a url to send to the user to reset their password
+
+  const resetUrl = `${req.protocol}://${req.hostname}:3000/my-account/reset-my-password/${resetToken}`;
+
+  // console.log(resetUrl);
+  // send email to client
+  const mail = {
+    from: 'rallygene0@gmail.com', // sender address
+    to: email, // list of receivers
+    subject: 'Reset Password Instructions ✔', // Subject line
+    text: resetUrl, // plain text body
+    // html: '<b>Hello world?</b>', // html body
+  };
+
+  try {
+    await sendEmail(mail);
+  } catch (e) {
+    console.log(e);
+    return next(
+      new ServerError('Unfortunately we could not send you an email!')
+    );
+  }
+
+  // res.json({ resetToken });
+  res.json({});
 });
 
 const resetMyPassword = catchAsyncErrors(async (req, res, next) => {
@@ -1296,14 +1551,14 @@ const resetMyPassword = catchAsyncErrors(async (req, res, next) => {
   // send error
   if (!account) {
     return next(
-      new ServerError$1('This account does not exist on our server', 404)
+      new ServerError('This account does not exist on our server', 404)
     );
   }
 
   // don't allow account to use the same password as current one
   if (await account.validatePassword(password)) {
     return next(
-      new ServerError$1('Your current and new password cannot be the same', 400)
+      new ServerError('Your current and new password cannot be the same', 400)
     );
   }
 
@@ -1315,8 +1570,16 @@ const resetMyPassword = catchAsyncErrors(async (req, res, next) => {
 
   console.log(account);
 
-  // logout all tokens stored before pwd change
-  account.tokens = [];
+  // logout all tokens stored before pwd change and store new token
+  const token = generateJwt(account.id);
+
+  account.tokens = [token];
+
+  // sign user in
+
+  setCookie(res, 'token', token);
+
+  res.setHeader('token', token);
 
   // save account
   await account.save();
@@ -1339,12 +1602,12 @@ const verifyAccount = catchAsyncErrors(async (req, res, next) => {
   // send error, no account found
   if (!account) {
     return next(
-      new ServerError$1('Unfortunately, we could not verify your account', 400)
+      new ServerError('Unfortunately, we could not verify your account', 400)
     );
   }
 
   if (account.verified) {
-    return next(new ServerError$1('Your account is already verified', 400));
+    return next(new ServerError('Your account is already verified', 400));
   }
 
   // mark account as verified
@@ -1369,11 +1632,31 @@ const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
 
   // don't send code to email if user is already verified
   if (account.verified) {
-    return next(new ServerError$1('This account is already verified', 400));
+    return next(new ServerError('This account is already verified', 400));
   }
 
   // generate verification code
   const verificationCode = await account.generateVerificationCode();
+
+  // generate verification code url
+  const verifyUrl = `${req.protocol}://${req.hostname}:3000/verify/${verificationCode}`;
+
+  // send email to client
+  const mail = {
+    from: 'rallygene0@gmail.com',
+    to: account.email,
+    subject: 'Verify Account Instructions ✔',
+    text: verifyUrl,
+  };
+
+  try {
+    await sendEmail(mail);
+  } catch (e) {
+    console.log(e);
+    return next(
+      new ServerError('Unfortunately we could not send you an email!')
+    );
+  }
 
   res.json({ verificationCode });
 });
@@ -1393,14 +1676,14 @@ const systemSignIn = catchAsyncErrors(async (req, res, next) => {
 
   if (!account) {
     // account does not exist err
-    return next(new ServerError$1('Account not found', 401));
+    return next(new ServerError('Account not found', 401));
   }
 
   // verify password
   const isPasswordValid = await account.validatePassword(password);
 
   if (!isPasswordValid) {
-    return next(new ServerError$1('Invalid password', 401));
+    return next(new ServerError('Invalid password', 401));
   }
 
   objectAssign({ ip: req.ip, signedIn: Date.now() }, account);
@@ -1420,183 +1703,192 @@ const systemSignIn = catchAsyncErrors(async (req, res, next) => {
 });
 
 // ADMIN ONLY FUNCTIONS
-const systemAdminCreateAccount = catchAsyncErrors(async (req, res, next) => {
-  // don't allow admin accounts creations
-  if (req.body.role === 'admin') {
-    return next(
-      new ServerError$1(
-        'You do not have permission to perform these actions',
-        403
-      )
-    );
+const systemAdminCreateAccount = catchAsyncErrors(
+  async (req, res, next) => {
+    // don't allow admin accounts creations
+    if (req.body.role === 'admin') {
+      return next(
+        new ServerError(
+          'You do not have permission to perform these actions',
+          403
+        )
+      );
+    }
+
+    const account = new Account(req.body);
+
+    const { firstname, lastname } = account;
+
+    // generate email
+    account.email = generateAccountEmail(firstname, lastname);
+
+    // generate default for account
+    account.password = generateDfPassword(firstname, lastname);
+    // set these accounts as verified (unnecessary anyways)
+    account.verified = true;
+    // save account
+    await account.save();
+
+    res.status(201).json(account);
   }
+);
 
-  const account = new Account(req.body);
+const systemAdminAccountUpdate = catchAsyncErrors(
+  async (req, res, next) => {
+    const { firstname, lastname, contacts } = req.body;
+    const account = await Account.findById(req.params.accountId);
+    // if account does not exist send err
+    if (!account) {
+      return next(new ServerError('Account not found', 401));
+    }
+    // update properties
+    objectAssign({ firstname, lastname }, account);
 
-  const { firstname, lastname } = account;
+    await account.save();
 
-  // generate email
-  account.email = generateAccountEmail(firstname, lastname);
-
-  // generate default for account
-  account.password = generateDfPassword(firstname, lastname);
-  // set these accounts as verified (unnecessary anyways)
-  account.verified = true;
-  // save account
-  await account.save();
-
-  res.status(201).json(account);
-});
-
-const systemAdminAccountUpdate = catchAsyncErrors(async (req, res, next) => {
-  const { firstname, lastname, contacts } = req.body;
-  const account = await Account.findById(req.params.accountId);
-  // if account does not exist send err
-  if (!account) {
-    return next(new ServerError$1('Account not found', 401));
+    res.json(account);
   }
-  // update properties
-  objectAssign({ firstname, lastname }, account);
+);
 
-  await account.save();
+const systemAdminRemoveAccount = catchAsyncErrors(
+  async (req, res, next) => {
+    const account = await Account.findById(req.params.accountId);
 
-  res.json(account);
-});
+    if (!account) return next(new ServerError('Account not found', 404));
 
-const systemAdminRemoveAccount = catchAsyncErrors(async (req, res, next) => {
-  const account = await Account.findById(req.params.accountId);
-
-  if (!account) return next(new ServerError$1('Account not found', 404));
-
-  if (
-    account.role === 'admin' ||
-    (req.account.role === 'sub-admin' &&
-      account.role === 'sub-admin' &&
-      !account._id.equals(req.account.id))
-  )
-    return next(
-      new ServerError$1("You're not allowed to perform these actions", 404)
-    );
-  // delete account
-  await Account.deleteOne({ _id: req.params.accountId });
-  // send response
-  res.status(204).json();
-});
-
-const systemAdminPasswordChange = catchAsyncErrors(async (req, res, next) => {
-  const account = await Account.findOne({
-    _id: req.params.accountId,
-    role: { $in: ['admin', 'sub-admin', 'agent'] },
-  });
-  // if account does not exist send err
-  if (!account) {
-    return next(new ServerError$1('Account not found', 401));
+    if (
+      account.role === 'admin' ||
+      (req.account.role === 'sub-admin' &&
+        account.role === 'sub-admin' &&
+        !account._id.equals(req.account.id))
+    )
+      return next(
+        new ServerError("You're not allowed to perform these actions", 404)
+      );
+    // delete account
+    await Account.deleteOne({ _id: req.params.accountId });
+    // send response
+    res.status(204).json();
   }
+);
 
-  // if (account.role === 'admin'account._id.equals(req.account.id)) {
+const systemAdminPasswordChange = catchAsyncErrors(
+  async (req, res, next) => {
+    const account = await Account.findOne({
+      _id: req.params.accountId,
+      role: { $in: ['admin', 'sub-admin', 'agent'] },
+    });
+    // if account does not exist send err
+    if (!account) {
+      return next(new ServerError('Account not found', 401));
+    }
 
-  // }
-  // reset password to default and force account to update password
-  account.password = generateDfPassword(account.firstname, account.lastname);
+    // if (account.role === 'admin'account._id.equals(req.account.id)) {
 
-  await account.save();
+    // }
+    // reset password to default and force account to update password
+    account.password = generateDfPassword(account.firstname, account.lastname);
 
-  res.json();
-});
+    await account.save();
 
-const router = express.Router();
+    res.json();
+  }
+);
+
+const router$1 = express.Router();
 
 const parentRoute = '/accounts';
 
 const systemParentRoute = `/system${parentRoute}`;
 
-router.post(`${parentRoute}/signup`, uploader({ files: 1 }).any(), signup);
-
 /** AUTHENTICATED */
 
-router.post(`${parentRoute}/signout`, authenticate(), signout);
+// logout
+router$1.post(`${parentRoute}/signout`, authenticate(), signout);
 
-router.get(`${parentRoute}/my-account`, authenticate(), getMyAccount);
+// fetch my account
+router$1.get(`${parentRoute}/my-account`, authenticate(), getMyAccount);
 
 /** NOT AUTHENTICATED */
 
-router.post(`${parentRoute}/signin`, signin);
+router$1.post(`${parentRoute}/signup`, uploader().single('avatar'), signup);
 
-router.post(`${parentRoute}/forgot-my-password`, forgotMyPassword);
+router$1.post(`${parentRoute}/signin`, signin);
 
-router.patch(`${parentRoute}/reset-password/:resetToken`, resetMyPassword);
+router$1.post(`${parentRoute}/forgot-my-password`, forgotMyPassword);
+
+router$1.patch(`${parentRoute}/reset-my-password/:resetToken`, resetMyPassword);
 
 /** AUTHENTICATED */
 
-router.patch(
+router$1.patch(
   `${parentRoute}/change-my-password`,
   authenticate(),
   changeMyPassword
 );
 
-router.patch(
+router$1.patch(
   `${parentRoute}/update-my-account`,
   authenticate(),
   updateMyAccount
 );
 
-router.delete(
-  `${parentRoute}/delete-my-account`,
-  authenticate(),
-  allowAccessTo('client'),
-  deleteMyAccount
-);
-
 // verify account
-router.get(`${parentRoute}/verify/:code`, authenticate(), verifyAccount);
+router$1.get(`${parentRoute}/verify/:code`, authenticate(), verifyAccount);
 
 // send verification code
-router.get(
+router$1.get(
   `${parentRoute}/verification-code`,
   authenticate(),
   sendVerficationCode
 );
 
 // SYSTEM ROUTES
-router.post(`${systemParentRoute}/signin`, systemSignIn);
-router.post(`${systemParentRoute}/signout`, authenticate('system'), signout);
-router.patch(
+router$1.post(`${systemParentRoute}/signin`, systemSignIn);
+router$1.post(`${systemParentRoute}/signout`, authenticate('system'), signout);
+router$1.patch(
   `${systemParentRoute}/change-my-password`,
   authenticate('system'),
   changeMyPassword
 );
 
 // ADMIN ROUTES
-router.get(
+router$1.get(
   `${systemParentRoute}/my-account`,
   authenticate('system'),
   getMyAccount
 );
 
-router.post(
+router$1.post(
   `${systemParentRoute}/create-account`,
   authenticate('system'),
   allowAccessTo('admin', 'sub-admin'),
   systemAdminCreateAccount
 );
-router.patch(
+router$1.patch(
   `${systemParentRoute}/update-account/:accountId`,
   authenticate('system'),
   allowAccessTo('admin', 'sub-admin'),
   systemAdminAccountUpdate
 );
-router.delete(
+router$1.delete(
   `${systemParentRoute}/delete-account/:accountId`,
   authenticate('system'),
   allowAccessTo('admin', 'sub-admin'),
   systemAdminRemoveAccount
 );
-router.patch(
+router$1.patch(
   `${systemParentRoute}/change-password/:accountId`,
   authenticate('system'),
   allowAccessTo('admin', 'sub-admin'),
   systemAdminPasswordChange
 );
+
+const router = express.Router();
+
+// server main routes
+router.use('/', router$1);
+router.use('/', router$2);
 
 // start db connection
 const connectToDb = async () => {
@@ -1645,33 +1937,51 @@ const connectToDb = async () => {
 
 const setupExpressMiddleware = server => {
   // setup environment variables
-  dotenv.config();
+  dotenv.config({});
+
   // parse json
   server.use(express.json());
+
+  // parse form data
+  server.use(express.urlencoded({ extended: true }));
+
   // setup cors
-  server.use(cors());
+  // server.use(cors());
+  server.use(
+    cors({
+      origin: 'http://localhost:3000',
+      credentials: true,
+    })
+  );
+
   // parse cookies
   server.use(cookieParser());
+
   // setup compression
   server.use(compress());
+
   // setup helmet to protect server
   server.use(helmet());
 
   // serve static files
-  server.use(express.static(path.resolve(__dirname, 'Public')));
+  server.use(express.static(path.resolve(__dirname, 'public')));
 
-  // server main routes
+  // server.get('api./subdomain', (req, res) => res.send('Test working...'));
+
+  // WEB SERVER ROUTES
+  server.use('/', router$3);
+
+  // API ROUTES
   server.use('/api/v1', router);
-  server.use('/api/v1', router$1);
 
-  // handles all unmacthing routes
+  // Handle 404 Not found
   server.all('*', unroutable);
 
-  // error handler
+  // Global Error handler
   server.use(globalErrorHandler);
 };
 
-// port listeners
+// Port listener
 const listen = async (server, port = process.env.PORT || 9090) => {
   try {
     await server.listen(port, console.log);

@@ -3,13 +3,14 @@ import argon from 'argon2';
 import { deleteProps, hashToken } from '../utils';
 import crypto from 'crypto';
 import emailValidator from 'email-validator';
+import { ServerError } from '../handlers/errors';
 
 // SCHEMA
 const accountSchema = new mongoose.Schema(
   {
     firstname: {
       type: String,
-      minlength: [4, 'Firstname cannot be less than 5 characetrs'],
+      minlength: [4, 'Firstname cannot be less than 4 characetrs'],
       maxlength: [15, 'Firstname cannot exceed 15 characters'],
       required: [true, 'Firstname is required'],
       lowercase: true,
@@ -35,15 +36,12 @@ const accountSchema = new mongoose.Schema(
     },
     contacts: {
       type: [{ type: String, required: true }],
-      validate: [
-        (numbers) => numbers.length <= 3,
-        'Phone numbers max out at 3',
-      ],
+      validate: [numbers => numbers.length <= 3, 'Phone numbers max out at 3'],
     },
     role: {
       type: String,
       enum: ['admin', 'sub-admin', 'agent', 'client'],
-      required: [true],
+      required: [true, 'An must have a role'],
       default: 'client',
     },
     password: {
@@ -88,9 +86,7 @@ const accountSchema = new mongoose.Schema(
 
 // virtuals
 accountSchema.virtual('avatarUrls').get(function () {
-  return this.avatarNames.map(
-    (name) => `${process.env.CLOUDFRONT_URL}/${name}`
-  );
+  return this.avatarNames.map(name => `${process.env.CLOUDFRONT_URL}/${name}`);
 });
 
 /** HOOKS */
@@ -109,9 +105,11 @@ accountSchema.pre('save', async function (next) {
 
   const { password } = account;
 
+  const passwordLength = password.length;
+
   console.log(password);
 
-  if (password < minlength || password > maxlength) {
+  if (password < passwordLength || passwordLength > maxlength) {
     return next(
       new ServerError('Your password is either too short or too long', 400)
     );

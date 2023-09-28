@@ -2,9 +2,10 @@ import multer from 'multer';
 import sharp from 'sharp';
 import { uploadToS3 } from './s3';
 import { ServerError } from './handlers/errors';
-import uid from 'uniqid';
+import uniqid from 'uniqid';
 import { sign } from 'jsonwebtoken';
 import crypto from 'crypto';
+import nodemailer from 'nodemailer';
 
 export const objectAssign = (source, target) => {
   if (!source || !target) {
@@ -17,7 +18,7 @@ export const objectAssign = (source, target) => {
 
 // delete properties from a source object
 export const deleteProps = (src, ...props) => {
-  props.forEach((prop) => delete src[prop]);
+  props.forEach(prop => delete src[prop]);
 };
 
 export const generateJwt = (
@@ -29,7 +30,8 @@ export const generateJwt = (
   });
 };
 
-export const uploader = (limits) => {
+export const uploader = limits => {
+  //console.log(process.env.MAX_IMAGE_SIZE);
   limits = {
     fileSize: parseInt(process.env.MAX_IMAGE_SIZE) || 5000000,
     files: 1,
@@ -51,21 +53,26 @@ export const uploader = (limits) => {
   return multer({ storage, limits, fileFilter });
 };
 
-export const isFullHd = async (file) => {
+export const isFullHd = async file => {
   if (!file) return;
   // get image dimensions
   const { width, height } = await sharp(file.buffer).metadata();
+
   // if width & height >= FHD image passes test
-  if (width >= 1920 && height >= 1080) return true;
-  // image fails test
-  return false;
+  // if (width >= 1920 && height >= 1080) return true;
+
+  // if width or height does is not FHD+ test fails
+  if (width < 1920 || height < 1080) return { passed: false };
+
+  // test passes
+  return { passed: true, width, height };
 };
 
 export const createFileCopies = async (source, dimensions = []) => {
   if (!source) return;
 
   const copies = [];
-  const all = [source];
+  const all = [];
 
   for (let dimension of dimensions) {
     const copy = { ...source };
@@ -80,6 +87,8 @@ export const createFileCopies = async (source, dimensions = []) => {
     all.push(copy);
   }
 
+  all.push(source);
+
   return { source, copies, all };
 };
 
@@ -91,10 +100,8 @@ export const convertToWebp = async (file, quality = 100) => {
     // convert to webp
     const converted = await sharp(file.buffer).webp({ quality }).toBuffer();
 
-    console.log('file sizes: ', file.size, converted.byteLength);
     // only save converted if it's size is less than original file
     if (converted.byteLength < file.size) {
-      console.log('converted');
       file.buffer = converted;
       file.mimetype = 'images/webp';
     }
@@ -118,13 +125,14 @@ export const uploadAvatar = async (file, account, next) => {
     const webpAvatar = await convertToWebp(file);
 
     // make copies of account avatar/profile in the given dimensions
-    const copyOutput = await createFileCopies(webpAvatar, [200, 400, 800]);
-    const avatarFiles = copyOutput.all;
+    const copyOutput = await createFileCopies(webpAvatar, [250, 500, 800]);
+    // only save the copies not the original
+    const avatarFiles = copyOutput.copies;
 
     // upload files to AWS S3
     await uploadToS3(avatarFiles);
 
-    account.avatarNames = avatarFiles.map((avatar) => avatar.originalname);
+    account.avatarNames = avatarFiles.map(avatar => avatar.originalname);
 
     await account.save();
   }
@@ -133,10 +141,14 @@ export const uploadAvatar = async (file, account, next) => {
 export const uploadPropertyImages = async (images, property, next) => {
   for (let image of images) {
     // rename property images
-    image.originalname = `property-img-${uid()}`;
+    image.originalname = `property-img-${uniqid()}`;
 
     // make sure images match our criterias
-    const isHighRes = await isFullHd(image);
+    const resolution = await isFullHd(image);
+
+    const isHighRes = resolution.passed;
+
+    console.log(isHighRes);
 
     // send error if images are not clear (hd)
     if (!isHighRes) {
@@ -154,6 +166,9 @@ export const uploadPropertyImages = async (images, property, next) => {
     // create smaller image versions from original image uploaded by client
     const copyOutput = await createFileCopies(webpImage, dimensions);
 
+    // rename original image to add width for responsive images
+    webpImage.originalname = `${image.originalname}-${resolution.width}`;
+
     // original image + smaller versions of image
     const imageAndCopies = copyOutput.all;
 
@@ -163,7 +178,7 @@ export const uploadPropertyImages = async (images, property, next) => {
     // save image and its different versions info to db
     const imageObject = {
       sourceName: webpImage.originalname,
-      names: imageAndCopies.map((img) => img.originalname),
+      names: imageAndCopies.map(img => img.originalname),
     };
     // add imageObject to imageNames list
     property.imagesNames.push(imageObject);
@@ -173,7 +188,7 @@ export const uploadPropertyImages = async (images, property, next) => {
 };
 
 // create pages array out of a number of pages
-const createPages = (numPages) => {
+const createPages = numPages => {
   let firstPage = 1;
   const pages = [];
   for (let i = firstPage; i <= numPages; i++) {
@@ -187,11 +202,10 @@ export const paginateModel = async (
   searchObject = {},
   filterObject = {},
   sortStr = '',
-  pagingInfo = { page: 1, limit: 15 },
+  /* paging info */ { page, limit },
   // all these must be popolated
   ...populates
 ) => {
-  console.log(searchObject, filterObject, sortStr, pagingInfo);
   // variables
   let docs;
   let docsCount;
@@ -199,16 +213,18 @@ export const paginateModel = async (
   // find documents length
   const searchObjectLength = Object.values(searchObject).length;
 
-  console.log(searchObjectLength);
-
   if (searchObjectLength) {
     query = Model.countDocuments(searchObject).find(filterObject);
     docsCount = await query.countDocuments();
-  } else docsCount = await Model.countDocuments(filterObject);
+  } else {
+    // we didn't use countDocuments here because it doesn't support $nearSphere
+    const documents = await Model.find(filterObject);
+    docsCount = documents.length;
+  }
 
   // get paging info
-  let page = parseInt(pagingInfo.page);
-  let limit = parseInt(pagingInfo.limit);
+  page = Number(page);
+  limit = Number(limit);
 
   // sanitize user input
   if (isNaN(page) || page < 1) page = 1;
@@ -234,19 +250,20 @@ export const paginateModel = async (
       .skip(skip)
       .limit(limit);
 
-    populates.forEach((population) => query.populate(population));
+    populates.forEach(population => query.populate(population));
 
     docs = await query;
   } else {
     query = Model.find(filterObject).sort(sortStr).skip(skip).limit(limit);
 
-    populates.forEach((population) => query.populate(population));
+    populates.forEach(population => query.populate(population));
 
-    docs = await query.exec();
+    docs = await query;
   }
 
   const docsLength = docs.length;
 
+  console.log('Total Results: ', docsCount);
   return {
     page,
     pageCount: pages,
@@ -263,7 +280,7 @@ export const paginateModel = async (
   };
 };
 
-export const sendEmail = async (content) => {
+export const sendEmail = async content => {
   const transporter = nodemailer.createTransport({
     host: 'smtp-relay.brevo.com',
     port: 587,
@@ -276,11 +293,11 @@ export const sendEmail = async (content) => {
   return await transporter.sendMail(content);
 };
 
-export const hashToken = (raw) => {
+export const hashToken = raw => {
   return crypto.createHash('sha256').update(raw).digest('hex');
 };
 
-export const setCookie = (res, name, value, options) => {
+export const setCookie = (res, name, value, options = {}) => {
   options = { maxAge: 30 * 24 * 60 * 60 * 1000, httpOnly: true, ...options };
   res.cookie(name, value, options);
 };
@@ -296,4 +313,13 @@ export const generateAccountEmail = (fn = '', ln = '') => {
 
 export const generateDfPassword = (fn = '', ln = '') => {
   return `PASS-${fn.slice(0, 2)}${ln.slice(0, 2)}`;
+};
+
+export const parseStringToBoolean = (source = {}, ...properties) => {
+  for (let property of properties) {
+    if (source[property] === 'true' || source[property] === '')
+      source[property] = true;
+    if (source[property] === 'false') source[property] = false;
+  }
+  return source;
 };

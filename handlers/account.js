@@ -6,6 +6,7 @@ import {
   generateJwt,
   hashToken,
   objectAssign,
+  sendEmail,
   setCookie,
   uploadAvatar,
 } from '../utils';
@@ -14,6 +15,11 @@ import { removeFroms3 } from '../s3';
 
 // REGULAR USER HANDLERS
 export const signup = catchAsyncErrors(async (req, res, next) => {
+  console.clear();
+
+  console.log('Body:', req.body);
+  console.log('File: ', req.file);
+
   // make sure this account does not exist before we create one
   if (await Account.findOne({ email: req.body.email })) {
     return next(
@@ -36,13 +42,14 @@ export const signup = catchAsyncErrors(async (req, res, next) => {
   await account.save();
 
   // get account avatar if uploaded
-  const avatar = req.files ? req.files[0] : undefined;
+  const avatar = req.file;
 
   // proccess and upload avatar to s3
   await uploadAvatar(avatar, account, next);
 
-  // setCookie(res, 'Auth-Token', token);
-  res.setHeader('auth_token', token);
+  res.setHeader('token', token);
+
+  setCookie(res, 'token', token);
 
   res.json(account);
 });
@@ -70,14 +77,22 @@ export const signin = catchAsyncErrors(async (req, res, next) => {
   // regular users have long expiration tokens while admins and agents' expire in 1d
   const token = generateJwt(account.id);
 
+  // don't allow more than specified login
+  const tokensLength = account.tokens.length;
+
+  // if logged in token + this login token > specified
+  // wipe old tokens to logout previous devices
+  if (tokensLength + 1 > Number(process.env.MAX_LOGIN_TOKENS) || 10) {
+    account.tokens = [];
+  }
   // store token
   account.tokens.push(token);
 
   await account.save();
 
-  //setCookie(res, 'Auth-Token', token);
+  setCookie(res, 'token', token);
 
-  res.setHeader('auth_token', token);
+  res.setHeader('token', token);
 
   res.json(account);
 });
@@ -85,15 +100,16 @@ export const signin = catchAsyncErrors(async (req, res, next) => {
 export const signout = catchAsyncErrors(async (req, res, next) => {
   const { account, token } = req;
 
-  // log user out
+  // log user out from server
   account.signedOut = Date.now();
   account.tokens = account.tokens.filter(t => t !== token);
 
   await account.save();
-  // remove cookie (not required)
-  // setCookie(res, 'Auth-Token', undefined, { maxAge: 0 });
 
-  res.status(204).json();
+  // remove cookie (not required)
+  setCookie(res, 'token', undefined, { maxAge: 0 });
+
+  res.status(204).json({});
 });
 
 export const changeMyPassword = catchAsyncErrors(async (req, res, next) => {
@@ -122,7 +138,14 @@ export const changeMyPassword = catchAsyncErrors(async (req, res, next) => {
   objectAssign({ password }, account);
 
   // update tokens
-  account.tokens = [];
+  const token = generateJwt(account.id);
+
+  account.tokens = [token];
+
+  // sign account in
+  setCookie(res, 'token', token);
+
+  res.setHeader('token', token);
 
   // save
   await account.save();
@@ -164,10 +187,8 @@ export const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
       await removeFroms3(image.names);
     }
   }
-  // delete properties owned by this account
+  // delete all properties owned by this account
   await Property.deleteMany({ ownerId: accountId });
-  // delete all offers made by this account
-  await Offer.deleteMany({ offererId: accountId });
   // finally delete account
   await Account.deleteOne({ _id: req.account.id });
   // respond to client
@@ -189,7 +210,31 @@ export const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
   // generate reset token
   const resetToken = await account.generateResetToken();
 
-  res.json({ resetToken });
+  // construct a url to send to the user to reset their password
+
+  const resetUrl = `${req.protocol}://${req.hostname}:3000/my-account/reset-my-password/${resetToken}`;
+
+  // console.log(resetUrl);
+  // send email to client
+  const mail = {
+    from: 'rallygene0@gmail.com', // sender address
+    to: email, // list of receivers
+    subject: 'Reset Password Instructions ✔', // Subject line
+    text: resetUrl, // plain text body
+    // html: '<b>Hello world?</b>', // html body
+  };
+
+  try {
+    await sendEmail(mail);
+  } catch (e) {
+    console.log(e);
+    return next(
+      new ServerError('Unfortunately we could not send you an email!')
+    );
+  }
+
+  // res.json({ resetToken });
+  res.json({});
 });
 
 export const resetMyPassword = catchAsyncErrors(async (req, res, next) => {
@@ -230,8 +275,16 @@ export const resetMyPassword = catchAsyncErrors(async (req, res, next) => {
 
   console.log(account);
 
-  // logout all tokens stored before pwd change
-  account.tokens = [];
+  // logout all tokens stored before pwd change and store new token
+  const token = generateJwt(account.id);
+
+  account.tokens = [token];
+
+  // sign user in
+
+  setCookie(res, 'token', token);
+
+  res.setHeader('token', token);
 
   // save account
   await account.save();
@@ -289,6 +342,26 @@ export const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
 
   // generate verification code
   const verificationCode = await account.generateVerificationCode();
+
+  // generate verification code url
+  const verifyUrl = `${req.protocol}://${req.hostname}:3000/verify/${verificationCode}`;
+
+  // send email to client
+  const mail = {
+    from: 'rallygene0@gmail.com',
+    to: account.email,
+    subject: 'Verify Account Instructions ✔',
+    text: verifyUrl,
+  };
+
+  try {
+    await sendEmail(mail);
+  } catch (e) {
+    console.log(e);
+    return next(
+      new ServerError('Unfortunately we could not send you an email!')
+    );
+  }
 
   res.json({ verificationCode });
 });

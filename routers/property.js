@@ -14,11 +14,11 @@ import { authenticate, preventUnverifiedAccounts } from '../handlers/auth';
 
 const router = express.Router();
 
-const parentRoute = '/properties';
-const childRoute = `${parentRoute}/:propertyId`;
+const properties = '/properties';
+const propertyRoute = `${properties}/:propertyId`;
 
 router
-  .route(parentRoute)
+  .route(properties)
   .get(fetchProperties)
   .post(
     uploader({ files: 12 }).any(),
@@ -27,23 +27,25 @@ router
     createProperty
   );
 
-router.get(`${parentRoute}/my-properties`, authenticate(), fetchMyProperties);
+router.get(`${properties}/my-properties`, authenticate(), fetchMyProperties);
 
 router
-  .route(childRoute)
+  .route(propertyRoute)
   .get(fetchProperty)
   .patch(authenticate(), updateProperty)
   .delete(authenticate(), removeProperty);
 
+// add images to property
 router.post(
-  `${childRoute}/images`,
+  `${propertyRoute}/images`,
   authenticate(),
   uploader({ files: 12 }).any(),
   addPropertyImages
 );
 
+// remove a property image
 router.delete(
-  `${childRoute}/images/:imageName`,
+  `${propertyRoute}/images/:imageName`,
   authenticate(),
   removePropertyImage
 );
