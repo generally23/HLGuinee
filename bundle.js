@@ -63,7 +63,6 @@ const removeFroms3 = async (fileNames = []) => {
   const s3Instance = createS3Instance();
   const bucketName = process.env.AWS_BUCKET_NAME;
 
-  console.log(fileNames);
   // Delete each given filename from the s3 Bucket
   for (let filename of fileNames) {
     // command parameters
@@ -101,7 +100,7 @@ const catchAsyncErrors = f => {
 };
 
 const globalErrorHandler = (err, req, res, next) => {
-  console.error('The Error Happened Here!!! : ', err);
+  console.error('The Error Happened Here!!! : ', err, err.operational);
 
   // const { ENVIRONMENT = 'dev' } = process.env;
   const { ENVIRONMENT = 'dev' } = process.env;
@@ -111,6 +110,7 @@ const globalErrorHandler = (err, req, res, next) => {
   if (ENVIRONMENT === 'dev') {
     // known error
     if (err.operational) {
+      console.log('sendin error rn');
       res.status(err.statusCode).json({ ...err, message: err.message });
     } else {
       // send error
@@ -182,7 +182,6 @@ const generateJwt = (
 };
 
 const uploader = limits => {
-  //console.log(process.env.MAX_IMAGE_SIZE);
   limits = {
     fileSize: parseInt(process.env.MAX_IMAGE_SIZE) || 5000000,
     files: 1,
@@ -191,6 +190,7 @@ const uploader = limits => {
   const storage = multer.memoryStorage();
   // filter files to only accept images
   const fileFilter = (req, file, cb) => {
+    console.log('file', file);
     const regex = /.+\/(jpg|jpeg|png|webp)$/;
 
     if (!file.mimetype.match(regex)) {
@@ -265,13 +265,7 @@ const uploadAvatar = async (file, account, next) => {
   if (file && account) {
     // change avatar name
     file.originalname = `avatar-${account.id}`;
-    // check if image is at least 1920x1080(FHD)
-    const isAccepted = isFullHd(file);
 
-    // send error if image is low quality < FHD
-    if (!isAccepted) {
-      return next(new ServerError('Please upload a high quality image', 400));
-    }
     // convert original file to webp
     const webpAvatar = await convertToWebp(file);
 
@@ -336,6 +330,7 @@ const uploadPropertyImages = async (images, property, next) => {
     // persist to db
     await property.save();
   }
+  return true;
 };
 
 // create pages array out of a number of pages
@@ -503,9 +498,6 @@ const locationSchema = new mongoose.Schema({
   },
 });
 
-// helper functions
-// this function return true if type === house
-
 // house validator
 const validator = value => value !== 'house';
 
@@ -552,7 +544,8 @@ const propertySchema = new mongoose.Schema(
         'Area built is required',
       ],
       default: function () {
-        return this.area;
+        // if property is a house and user did not set this property set to area
+        return this.type === 'house' ? this.area : undefined;
       },
       validate: {
         validator,
@@ -572,7 +565,7 @@ const propertySchema = new mongoose.Schema(
       required: [true, 'A property needs a title'],
     },
     // description
-    description: {
+    story: {
       type: String,
     },
     status: {
@@ -597,13 +590,8 @@ const propertySchema = new mongoose.Schema(
         message: 'Rooms are only for a house',
       },
     },
-    // bathrooms: {
-    //   type: Number,
-    //   validate: {
-    //     validator,
-    //     message: 'Bathrooms are only for a house',
-    //   },
-    // },
+
+    // bathrooms:
     externalBathrooms: {
       type: Number,
       default: 0,
@@ -730,7 +718,7 @@ const propertySchema = new mongoose.Schema(
     },
     tags: String,
   },
-  { timestamps: true, toJSON: { virtuals: true } }
+  { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
 
 // indexes
@@ -759,6 +747,7 @@ propertySchema.virtual('images').get(function () {
 
   return imagesNames.map(image => {
     return {
+      sourceName: image.sourceName,
       src: `${baseURI}/${image.sourceName}`,
       srcset: image.names.map(name => `${baseURI}/${name}`),
     };
@@ -768,6 +757,14 @@ propertySchema.virtual('images').get(function () {
 // hooks
 
 // methods
+propertySchema.methods.toJSON = function () {
+  // account clone
+  const property = this.toObject();
+  // remove props from user object
+  deleteProps(property, 'imagesNames', '__v');
+  // return value will be sent to client
+  return property;
+};
 
 const Property = mongoose.model('Property', propertySchema);
 
@@ -831,8 +828,29 @@ const createProperty = catchAsyncErrors(async (req, res, next) => {
   // parsed boolean strings since multer won't
   parseStringToBoolean(req.body, 'cuisine', 'pool', 'fenced');
 
+  // parse location object
+  req.body.location = JSON.parse(req.body.location);
+
   // create new property
   const property = new Property(req.body);
+
+  // if promo period hasn't expired auto publish property for free
+  // promo is 1 year so convert down to milliseconds
+  const promoPeriod =
+    parseInt(process.env.PROMO_PERIOD) * 12 * 30 * 24 * 60 * 60 * 1000;
+
+  const promoStartDate = parseInt(process.env.PROMO_START_DATE);
+
+  console.log(
+    promoStartDate + promoPeriod,
+    Date.now(),
+    promoStartDate + promoPeriod > Date.now()
+  );
+
+  // promo is still running
+  if (promoStartDate + promoPeriod > Date.now()) property.published = true;
+
+  console.log('Published: ', property.published);
 
   // associate property to it's owner
   property.ownerId = req.account.id;
@@ -840,16 +858,17 @@ const createProperty = catchAsyncErrors(async (req, res, next) => {
   // property uploaded images
   let images = req.files || [];
 
+  console.log(images);
+
   // save property to DB
   await property.save();
 
   // upload property images to S3 bucket
-  await uploadPropertyImages(images, property, next);
+  const hasUploaded = await uploadPropertyImages(images, property, next);
 
-  console.log('still ran');
-
-  // send success response
-  res.status(201).json(property);
+  // send success response if succesfull upload if not error has already been sent prevent sending response 2x
+  // or will cause cannot set Headers after sent errors
+  hasUploaded && res.status(201).json(property);
 });
 
 const fetchProperty = catchAsyncErrors(async (req, res, next) => {
@@ -963,7 +982,6 @@ const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
   // uploaded images
   const uploadedImages = req.files || [];
 
-  console.log(uploadedImages);
   // maximum number of images allowed for a single property
   const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 40;
 
@@ -979,9 +997,13 @@ const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  await uploadPropertyImages(uploadedImages, property, next);
+  const hasUploaded = await uploadPropertyImages(
+    uploadedImages,
+    property,
+    next
+  );
 
-  res.json(property);
+  hasUploaded && res.json(property);
 });
 
 const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
@@ -1294,8 +1316,8 @@ router$2
   .route(properties)
   .get(fetchProperties)
   .post(
-    uploader({ files: 12 }).any(),
     authenticate(),
+    uploader({ files: 12 }).any(),
     preventUnverifiedAccounts,
     createProperty
   );
@@ -1331,8 +1353,6 @@ router$2
 
 // REGULAR USER HANDLERS
 const signup = catchAsyncErrors(async (req, res, next) => {
-  console.clear();
-
   console.log('Body:', req.body);
   console.log('File: ', req.file);
 
@@ -1361,7 +1381,7 @@ const signup = catchAsyncErrors(async (req, res, next) => {
   const avatar = req.file;
 
   // proccess and upload avatar to s3
-  await uploadAvatar(avatar, account, next);
+  await uploadAvatar(avatar, account);
 
   res.setHeader('token', token);
 
@@ -1485,7 +1505,7 @@ const updateMyAccount = catchAsyncErrors(async (req, res, next) => {
   await account.save();
 
   // process and update avatar
-  await uploadAvatar(avatar, account, next);
+  await uploadAvatar(avatar, account);
 
   res.json(account);
 });

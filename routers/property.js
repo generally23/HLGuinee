@@ -21,8 +21,8 @@ router
   .route(properties)
   .get(fetchProperties)
   .post(
-    uploader({ files: 12 }).any(),
     authenticate(),
+    uploader({ files: 12 }).any(),
     preventUnverifiedAccounts,
     createProperty
   );

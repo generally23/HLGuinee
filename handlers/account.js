@@ -15,8 +15,6 @@ import { removeFroms3 } from '../s3';
 
 // REGULAR USER HANDLERS
 export const signup = catchAsyncErrors(async (req, res, next) => {
-  console.clear();
-
   console.log('Body:', req.body);
   console.log('File: ', req.file);
 

@@ -64,8 +64,29 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
   // parsed boolean strings since multer won't
   parseStringToBoolean(req.body, 'cuisine', 'pool', 'fenced');
 
+  // parse location object
+  req.body.location = JSON.parse(req.body.location);
+
   // create new property
   const property = new Property(req.body);
+
+  // if promo period hasn't expired auto publish property for free
+  // promo is 1 year so convert down to milliseconds
+  const promoPeriod =
+    parseInt(process.env.PROMO_PERIOD) * 12 * 30 * 24 * 60 * 60 * 1000;
+
+  const promoStartDate = parseInt(process.env.PROMO_START_DATE);
+
+  console.log(
+    promoStartDate + promoPeriod,
+    Date.now(),
+    promoStartDate + promoPeriod > Date.now()
+  );
+
+  // promo is still running
+  if (promoStartDate + promoPeriod > Date.now()) property.published = true;
+
+  console.log('Published: ', property.published);
 
   // associate property to it's owner
   property.ownerId = req.account.id;
@@ -73,16 +94,17 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
   // property uploaded images
   let images = req.files || [];
 
+  console.log(images);
+
   // save property to DB
   await property.save();
 
   // upload property images to S3 bucket
-  await uploadPropertyImages(images, property, next);
+  const hasUploaded = await uploadPropertyImages(images, property, next);
 
-  console.log('still ran');
-
-  // send success response
-  res.status(201).json(property);
+  // send success response if succesfull upload if not error has already been sent prevent sending response 2x
+  // or will cause cannot set Headers after sent errors
+  hasUploaded && res.status(201).json(property);
 });
 
 export const fetchProperty = catchAsyncErrors(async (req, res, next) => {
@@ -196,7 +218,6 @@ export const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
   // uploaded images
   const uploadedImages = req.files || [];
 
-  console.log(uploadedImages);
   // maximum number of images allowed for a single property
   const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 40;
 
@@ -212,9 +233,13 @@ export const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  await uploadPropertyImages(uploadedImages, property, next);
+  const hasUploaded = await uploadPropertyImages(
+    uploadedImages,
+    property,
+    next
+  );
 
-  res.json(property);
+  hasUploaded && res.json(property);
 });
 
 export const removePropertyImage = catchAsyncErrors(async (req, res, next) => {

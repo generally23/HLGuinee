@@ -23,7 +23,7 @@ const catchAsyncErrors = f => {
 };
 
 const globalErrorHandler = (err, req, res, next) => {
-  console.error('The Error Happened Here!!! : ', err);
+  console.error('The Error Happened Here!!! : ', err, err.operational);
 
   // const { ENVIRONMENT = 'dev' } = process.env;
   const { ENVIRONMENT = 'dev' } = process.env;
@@ -33,6 +33,7 @@ const globalErrorHandler = (err, req, res, next) => {
   if (ENVIRONMENT === 'dev') {
     // known error
     if (err.operational) {
+      console.log('sendin error rn');
       res.status(err.statusCode).json({ ...err, message: err.message });
     } else {
       // send error

@@ -31,7 +31,6 @@ export const generateJwt = (
 };
 
 export const uploader = limits => {
-  //console.log(process.env.MAX_IMAGE_SIZE);
   limits = {
     fileSize: parseInt(process.env.MAX_IMAGE_SIZE) || 5000000,
     files: 1,
@@ -40,6 +39,7 @@ export const uploader = limits => {
   const storage = multer.memoryStorage();
   // filter files to only accept images
   const fileFilter = (req, file, cb) => {
+    console.log('file', file);
     const regex = /.+\/(jpg|jpeg|png|webp)$/;
 
     if (!file.mimetype.match(regex)) {
@@ -114,13 +114,7 @@ export const uploadAvatar = async (file, account, next) => {
   if (file && account) {
     // change avatar name
     file.originalname = `avatar-${account.id}`;
-    // check if image is at least 1920x1080(FHD)
-    const isAccepted = isFullHd(file);
 
-    // send error if image is low quality < FHD
-    if (!isAccepted) {
-      return next(new ServerError('Please upload a high quality image', 400));
-    }
     // convert original file to webp
     const webpAvatar = await convertToWebp(file);
 
@@ -185,6 +179,7 @@ export const uploadPropertyImages = async (images, property, next) => {
     // persist to db
     await property.save();
   }
+  return true;
 };
 
 // create pages array out of a number of pages

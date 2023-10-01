@@ -44,7 +44,6 @@ export const removeFroms3 = async (fileNames = []) => {
   const s3Instance = createS3Instance();
   const bucketName = process.env.AWS_BUCKET_NAME;
 
-  console.log(fileNames);
   // Delete each given filename from the s3 Bucket
   for (let filename of fileNames) {
     // command parameters

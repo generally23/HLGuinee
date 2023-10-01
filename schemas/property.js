@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { deleteProps } from '../utils';
 
 const imageSchema = new mongoose.Schema({
   sourceName: {
@@ -27,9 +28,6 @@ const locationSchema = new mongoose.Schema({
     },
   },
 });
-
-// helper functions
-// this function return true if type === house
 
 // house validator
 const validator = value => value !== 'house';
@@ -77,7 +75,8 @@ const propertySchema = new mongoose.Schema(
         'Area built is required',
       ],
       default: function () {
-        return this.area;
+        // if property is a house and user did not set this property set to area
+        return this.type === 'house' ? this.area : undefined;
       },
       validate: {
         validator,
@@ -97,7 +96,7 @@ const propertySchema = new mongoose.Schema(
       required: [true, 'A property needs a title'],
     },
     // description
-    description: {
+    story: {
       type: String,
     },
     status: {
@@ -122,13 +121,8 @@ const propertySchema = new mongoose.Schema(
         message: 'Rooms are only for a house',
       },
     },
-    // bathrooms: {
-    //   type: Number,
-    //   validate: {
-    //     validator,
-    //     message: 'Bathrooms are only for a house',
-    //   },
-    // },
+
+    // bathrooms:
     externalBathrooms: {
       type: Number,
       default: 0,
@@ -255,7 +249,7 @@ const propertySchema = new mongoose.Schema(
     },
     tags: String,
   },
-  { timestamps: true, toJSON: { virtuals: true } }
+  { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
 
 // indexes
@@ -284,6 +278,7 @@ propertySchema.virtual('images').get(function () {
 
   return imagesNames.map(image => {
     return {
+      sourceName: image.sourceName,
       src: `${baseURI}/${image.sourceName}`,
       srcset: image.names.map(name => `${baseURI}/${name}`),
     };
@@ -293,6 +288,14 @@ propertySchema.virtual('images').get(function () {
 // hooks
 
 // methods
+propertySchema.methods.toJSON = function () {
+  // account clone
+  const property = this.toObject();
+  // remove props from user object
+  deleteProps(property, 'imagesNames', '__v');
+  // return value will be sent to client
+  return property;
+};
 
 const Property = mongoose.model('Property', propertySchema);
 
