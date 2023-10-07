@@ -15,9 +15,6 @@ import { removeFroms3 } from '../s3';
 
 // REGULAR USER HANDLERS
 export const signup = catchAsyncErrors(async (req, res, next) => {
-  console.log('Body:', req.body);
-  console.log('File: ', req.file);
-
   // make sure this account does not exist before we create one
   if (await Account.findOne({ email: req.body.email })) {
     return next(
@@ -54,8 +51,12 @@ export const signup = catchAsyncErrors(async (req, res, next) => {
 
 export const signin = catchAsyncErrors(async (req, res, next) => {
   const { email, password } = req.body;
+
+  console.log(email, password);
   // find account
   const account = await Account.findOne({ email, role: 'client' });
+
+  console.log(account);
 
   if (!account) {
     // account does not exist err

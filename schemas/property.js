@@ -59,6 +59,12 @@ const propertySchema = new mongoose.Schema(
     // documented: {
     //   type: Boolean,
     // },
+    address: {
+      type: String,
+      required: [true, 'A property must have an address'],
+      lowercase: true,
+    },
+
     imagesNames: [imageSchema],
     // area
     area: {
@@ -152,7 +158,7 @@ const propertySchema = new mongoose.Schema(
         message: 'Internal Bathrooms are only for a house',
       },
     },
-    cuisine: {
+    hasCuisine: {
       type: Boolean,
       default: false,
       required: [
@@ -166,9 +172,9 @@ const propertySchema = new mongoose.Schema(
         message: 'Cuisine is only for houses',
       },
     },
-    garages: {
-      type: Number,
-      default: 0,
+    hasGarage: {
+      type: Boolean,
+      default: false,
       required: [
         function () {
           return this.type === 'house';
@@ -181,9 +187,9 @@ const propertySchema = new mongoose.Schema(
       },
     },
     // sale a manger
-    diningRooms: {
-      type: Number,
-      default: 0,
+    hasDiningRoom: {
+      type: Boolean,
+      default: false,
       required: [
         function () {
           return this.type === 'house';
@@ -196,9 +202,9 @@ const propertySchema = new mongoose.Schema(
       },
     },
     // salon
-    livingRooms: {
-      type: Number,
-      default: 0,
+    hasLivingRoom: {
+      type: Boolean,
+      default: false,
       required: [
         function () {
           return this.type === 'house';
@@ -233,7 +239,7 @@ const propertySchema = new mongoose.Schema(
       required: [true, 'Fenced is required'],
     },
 
-    pool: {
+    hasPool: {
       type: Boolean,
       default: false,
       required: [

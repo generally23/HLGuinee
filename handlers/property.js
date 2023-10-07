@@ -9,13 +9,12 @@ import {
 } from '../utils';
 
 export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
-  console.log(req.query.price);
   // latitude of client
   const latitude = Number(req.headers.latitude);
   // longitude of client
   const longitude = Number(req.headers.longitude);
   // radius default to 1000 meters for now
-  const radius = Number(req.headers.radius) || 10000;
+  const radius = Number(req.headers.radius) || 1000;
   // this filter finds properties near a given client location
   const geoFilter = {
     location: {
@@ -61,11 +60,12 @@ export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
 });
 
 export const createProperty = catchAsyncErrors(async (req, res, next) => {
+  console.log('Body: ', req.body);
   // parsed boolean strings since multer won't
-  parseStringToBoolean(req.body, 'cuisine', 'pool', 'fenced');
+  // parseStringToBoolean(req.body, 'cuisine', 'pool', 'fenced');
 
   // parse location object
-  req.body.location = JSON.parse(req.body.location);
+  // req.body.location = JSON.parse(req.body.location);
 
   // create new property
   const property = new Property(req.body);
@@ -77,12 +77,6 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
 
   const promoStartDate = parseInt(process.env.PROMO_START_DATE);
 
-  console.log(
-    promoStartDate + promoPeriod,
-    Date.now(),
-    promoStartDate + promoPeriod > Date.now()
-  );
-
   // promo is still running
   if (promoStartDate + promoPeriod > Date.now()) property.published = true;
 
@@ -92,19 +86,21 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
   property.ownerId = req.account.id;
 
   // property uploaded images
-  let images = req.files || [];
+  // let images = req.files || [];
 
-  console.log(images);
+  // console.log(images);
 
   // save property to DB
   await property.save();
 
   // upload property images to S3 bucket
-  const hasUploaded = await uploadPropertyImages(images, property, next);
+  // const hasUploaded = await uploadPropertyImages(images, property, next);
 
   // send success response if succesfull upload if not error has already been sent prevent sending response 2x
   // or will cause cannot set Headers after sent errors
-  hasUploaded && res.status(201).json(property);
+  // hasUploaded &&
+
+  res.status(201).json(property);
 });
 
 export const fetchProperty = catchAsyncErrors(async (req, res, next) => {

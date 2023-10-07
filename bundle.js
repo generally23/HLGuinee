@@ -7,6 +7,7 @@ var helmet = require('helmet');
 var cors = require('cors');
 var compress = require('compression');
 var cookieParser = require('cookie-parser');
+var mongoSanitize = require('express-mongo-sanitize');
 var multer = require('multer');
 var sharp = require('sharp');
 var clientS3 = require('@aws-sdk/client-s3');
@@ -168,9 +169,8 @@ const objectAssign = (source, target) => {
 };
 
 // delete properties from a source object
-const deleteProps = (src, ...props) => {
+const deleteProps = (src, ...props) =>
   props.forEach(prop => delete src[prop]);
-};
 
 const generateJwt = (
   id,
@@ -349,19 +349,28 @@ const paginateModel = async (
   filterObject = {},
   sortStr = '',
   /* paging info */ { page, limit },
-  // all these must be popolated
+  // all these must be populated
   ...populates
 ) => {
   // variables
   let docs;
   let docsCount;
   let query;
+  let matches;
+  let matchesIds;
   // find documents length
   const searchObjectLength = Object.values(searchObject).length;
 
   if (searchObjectLength) {
-    query = Model.countDocuments(searchObject).find(filterObject);
-    docsCount = await query.countDocuments();
+    matches = await Model.find(searchObject);
+    matchesIds = matches.map(match => match._id);
+
+    const documents = await Model.find({
+      _id: { $in: matchesIds },
+      ...filterObject,
+    });
+
+    docsCount = documents.length;
   } else {
     // we didn't use countDocuments here because it doesn't support $nearSphere
     const documents = await Model.find(filterObject);
@@ -390,8 +399,7 @@ const paginateModel = async (
   const skip = (page - 1) * limit;
 
   if (searchObjectLength) {
-    query = Model.find(searchObject)
-      .find(filterObject)
+    query = Model.find({ _id: { $in: matchesIds }, ...filterObject })
       .sort(sortStr)
       .skip(skip)
       .limit(limit);
@@ -410,6 +418,7 @@ const paginateModel = async (
   const docsLength = docs.length;
 
   console.log('Total Results: ', docsCount);
+
   return {
     page,
     pageCount: pages,
@@ -459,15 +468,6 @@ const generateAccountEmail = (fn = '', ln = '') => {
 
 const generateDfPassword = (fn = '', ln = '') => {
   return `PASS-${fn.slice(0, 2)}${ln.slice(0, 2)}`;
-};
-
-const parseStringToBoolean = (source = {}, ...properties) => {
-  for (let property of properties) {
-    if (source[property] === 'true' || source[property] === '')
-      source[property] = true;
-    if (source[property] === 'false') source[property] = false;
-  }
-  return source;
 };
 
 const imageSchema = new mongoose.Schema({
@@ -528,6 +528,12 @@ const propertySchema = new mongoose.Schema(
     // documented: {
     //   type: Boolean,
     // },
+    address: {
+      type: String,
+      required: [true, 'A property must have an address'],
+      lowercase: true,
+    },
+
     imagesNames: [imageSchema],
     // area
     area: {
@@ -621,7 +627,7 @@ const propertySchema = new mongoose.Schema(
         message: 'Internal Bathrooms are only for a house',
       },
     },
-    cuisine: {
+    hasCuisine: {
       type: Boolean,
       default: false,
       required: [
@@ -635,9 +641,9 @@ const propertySchema = new mongoose.Schema(
         message: 'Cuisine is only for houses',
       },
     },
-    garages: {
-      type: Number,
-      default: 0,
+    hasGarage: {
+      type: Boolean,
+      default: false,
       required: [
         function () {
           return this.type === 'house';
@@ -650,9 +656,9 @@ const propertySchema = new mongoose.Schema(
       },
     },
     // sale a manger
-    diningRooms: {
-      type: Number,
-      default: 0,
+    hasDiningRoom: {
+      type: Boolean,
+      default: false,
       required: [
         function () {
           return this.type === 'house';
@@ -665,9 +671,9 @@ const propertySchema = new mongoose.Schema(
       },
     },
     // salon
-    livingRooms: {
-      type: Number,
-      default: 0,
+    hasLivingRoom: {
+      type: Boolean,
+      default: false,
       required: [
         function () {
           return this.type === 'house';
@@ -702,7 +708,7 @@ const propertySchema = new mongoose.Schema(
       required: [true, 'Fenced is required'],
     },
 
-    pool: {
+    hasPool: {
       type: Boolean,
       default: false,
       required: [
@@ -773,13 +779,12 @@ Property.on('index', e => {
 });
 
 const fetchProperties = catchAsyncErrors(async (req, res, next) => {
-  console.log(req.query.price);
   // latitude of client
   const latitude = Number(req.headers.latitude);
   // longitude of client
   const longitude = Number(req.headers.longitude);
   // radius default to 1000 meters for now
-  Number(req.headers.radius) || 10000;
+  Number(req.headers.radius) || 1000;
   // this filter finds properties near a given client location
   const geoFilter = {
     location: {
@@ -825,11 +830,12 @@ const fetchProperties = catchAsyncErrors(async (req, res, next) => {
 });
 
 const createProperty = catchAsyncErrors(async (req, res, next) => {
+  console.log('Body: ', req.body);
   // parsed boolean strings since multer won't
-  parseStringToBoolean(req.body, 'cuisine', 'pool', 'fenced');
+  // parseStringToBoolean(req.body, 'cuisine', 'pool', 'fenced');
 
   // parse location object
-  req.body.location = JSON.parse(req.body.location);
+  // req.body.location = JSON.parse(req.body.location);
 
   // create new property
   const property = new Property(req.body);
@@ -841,12 +847,6 @@ const createProperty = catchAsyncErrors(async (req, res, next) => {
 
   const promoStartDate = parseInt(process.env.PROMO_START_DATE);
 
-  console.log(
-    promoStartDate + promoPeriod,
-    Date.now(),
-    promoStartDate + promoPeriod > Date.now()
-  );
-
   // promo is still running
   if (promoStartDate + promoPeriod > Date.now()) property.published = true;
 
@@ -856,19 +856,21 @@ const createProperty = catchAsyncErrors(async (req, res, next) => {
   property.ownerId = req.account.id;
 
   // property uploaded images
-  let images = req.files || [];
+  // let images = req.files || [];
 
-  console.log(images);
+  // console.log(images);
 
   // save property to DB
   await property.save();
 
   // upload property images to S3 bucket
-  const hasUploaded = await uploadPropertyImages(images, property, next);
+  // const hasUploaded = await uploadPropertyImages(images, property, next);
 
   // send success response if succesfull upload if not error has already been sent prevent sending response 2x
   // or will cause cannot set Headers after sent errors
-  hasUploaded && res.status(201).json(property);
+  // hasUploaded &&
+
+  res.status(201).json(property);
 });
 
 const fetchProperty = catchAsyncErrors(async (req, res, next) => {
@@ -1229,7 +1231,11 @@ accountSchema.methods.toJSON = function () {
     '__v',
     'reset_token',
     'reset_token_expiration_date',
-    'tokens'
+    'tokens',
+    'verificationCode',
+    'verificationCodeExpirationDate',
+    'resetToken',
+    'resetTokenExpirationDate'
   );
   // return value will be sent to client
   return account;
@@ -1312,15 +1318,12 @@ const router$2 = express.Router();
 const properties = '/properties';
 const propertyRoute = `${properties}/:propertyId`;
 
-router$2
-  .route(properties)
-  .get(fetchProperties)
-  .post(
-    authenticate(),
-    uploader({ files: 12 }).any(),
-    preventUnverifiedAccounts,
-    createProperty
-  );
+router$2.route(properties).get(fetchProperties).post(
+  authenticate(),
+  // uploader({ files: 12 }).any(),
+  preventUnverifiedAccounts,
+  createProperty
+);
 
 router$2.get(`${properties}/my-properties`, authenticate(), fetchMyProperties);
 
@@ -1353,9 +1356,6 @@ router$2
 
 // REGULAR USER HANDLERS
 const signup = catchAsyncErrors(async (req, res, next) => {
-  console.log('Body:', req.body);
-  console.log('File: ', req.file);
-
   // make sure this account does not exist before we create one
   if (await Account.findOne({ email: req.body.email })) {
     return next(
@@ -1392,8 +1392,12 @@ const signup = catchAsyncErrors(async (req, res, next) => {
 
 const signin = catchAsyncErrors(async (req, res, next) => {
   const { email, password } = req.body;
+
+  console.log(email, password);
   // find account
   const account = await Account.findOne({ email, role: 'client' });
+
+  console.log(account);
 
   if (!account) {
     // account does not exist err
@@ -1955,9 +1959,10 @@ const connectToDb = async () => {
   }
 };
 
+// setup all middleware functions
 const setupExpressMiddleware = server => {
   // setup environment variables
-  dotenv.config({});
+  dotenv.config();
 
   // parse json
   server.use(express.json());
@@ -1985,6 +1990,10 @@ const setupExpressMiddleware = server => {
 
   // serve static files
   server.use(express.static(path.resolve(__dirname, 'public')));
+
+  // sanitize every source of user input
+  // Request Body, URL Parameters, URL Query Parameters
+  server.use(mongoSanitize());
 
   // server.get('api./subdomain', (req, res) => res.send('Test working...'));
 

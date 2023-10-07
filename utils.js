@@ -17,9 +17,8 @@ export const objectAssign = (source, target) => {
 };
 
 // delete properties from a source object
-export const deleteProps = (src, ...props) => {
+export const deleteProps = (src, ...props) =>
   props.forEach(prop => delete src[prop]);
-};
 
 export const generateJwt = (
   id,
@@ -198,19 +197,28 @@ export const paginateModel = async (
   filterObject = {},
   sortStr = '',
   /* paging info */ { page, limit },
-  // all these must be popolated
+  // all these must be populated
   ...populates
 ) => {
   // variables
   let docs;
   let docsCount;
   let query;
+  let matches;
+  let matchesIds;
   // find documents length
   const searchObjectLength = Object.values(searchObject).length;
 
   if (searchObjectLength) {
-    query = Model.countDocuments(searchObject).find(filterObject);
-    docsCount = await query.countDocuments();
+    matches = await Model.find(searchObject);
+    matchesIds = matches.map(match => match._id);
+
+    const documents = await Model.find({
+      _id: { $in: matchesIds },
+      ...filterObject,
+    });
+
+    docsCount = documents.length;
   } else {
     // we didn't use countDocuments here because it doesn't support $nearSphere
     const documents = await Model.find(filterObject);
@@ -239,8 +247,7 @@ export const paginateModel = async (
   const skip = (page - 1) * limit;
 
   if (searchObjectLength) {
-    query = Model.find(searchObject)
-      .find(filterObject)
+    query = Model.find({ _id: { $in: matchesIds }, ...filterObject })
       .sort(sortStr)
       .skip(skip)
       .limit(limit);
@@ -259,6 +266,7 @@ export const paginateModel = async (
   const docsLength = docs.length;
 
   console.log('Total Results: ', docsCount);
+
   return {
     page,
     pageCount: pages,

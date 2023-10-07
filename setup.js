@@ -6,6 +6,7 @@ import cors from 'cors';
 import compress from 'compression';
 import cookieParser from 'cookie-parser';
 // import { default: helmet } from "helmet";
+import mongoSanitize from 'express-mongo-sanitize';
 
 import SERVER_ROUTER from './routers/Webserver';
 import API_ROUTER from './routers/Api';
@@ -60,9 +61,10 @@ export const connectToDb = async () => {
   }
 };
 
+// setup all middleware functions
 export const setupExpressMiddleware = server => {
   // setup environment variables
-  dotenv.config({});
+  dotenv.config();
 
   // parse json
   server.use(express.json());
@@ -90,6 +92,10 @@ export const setupExpressMiddleware = server => {
 
   // serve static files
   server.use(express.static(resolve(__dirname, 'public')));
+
+  // sanitize every source of user input
+  // Request Body, URL Parameters, URL Query Parameters
+  server.use(mongoSanitize());
 
   // server.get('api./subdomain', (req, res) => res.send('Test working...'));
 

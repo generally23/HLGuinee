@@ -179,7 +179,11 @@ accountSchema.methods.toJSON = function () {
     '__v',
     'reset_token',
     'reset_token_expiration_date',
-    'tokens'
+    'tokens',
+    'verificationCode',
+    'verificationCodeExpirationDate',
+    'resetToken',
+    'resetTokenExpirationDate'
   );
   // return value will be sent to client
   return account;

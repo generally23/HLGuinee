@@ -17,15 +17,12 @@ const router = express.Router();
 const properties = '/properties';
 const propertyRoute = `${properties}/:propertyId`;
 
-router
-  .route(properties)
-  .get(fetchProperties)
-  .post(
-    authenticate(),
-    uploader({ files: 12 }).any(),
-    preventUnverifiedAccounts,
-    createProperty
-  );
+router.route(properties).get(fetchProperties).post(
+  authenticate(),
+  // uploader({ files: 12 }).any(),
+  preventUnverifiedAccounts,
+  createProperty
+);
 
 router.get(`${properties}/my-properties`, authenticate(), fetchMyProperties);
 
