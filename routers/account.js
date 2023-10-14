@@ -17,8 +17,6 @@ import {
   systemSignIn,
   verifyAccount,
   sendVerficationCode,
-  getAuthenticationStatus,
-  getMyProperties,
 } from '../handlers/account';
 import { uploader } from '../utils';
 

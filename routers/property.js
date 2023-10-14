@@ -7,7 +7,7 @@ import {
   updateProperty,
   removeProperty,
   addPropertyImages,
-  removePropertyImage,
+  removePropertyImages,
   fetchMyProperties,
 } from '../handlers/property';
 import { authenticate, preventUnverifiedAccounts } from '../handlers/auth';
@@ -41,10 +41,10 @@ router.post(
 );
 
 // remove a property image
-router.delete(
-  `${propertyRoute}/images/:imageName`,
+router.post(
+  `${propertyRoute}/images/delete`,
   authenticate(),
-  removePropertyImage
+  removePropertyImages
 );
 
 // SYSTEM SPECIFIC ROUTES

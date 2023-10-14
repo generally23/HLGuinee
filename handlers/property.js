@@ -9,6 +9,7 @@ import {
 } from '../utils';
 
 export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
+  console.log(req.query);
   // latitude of client
   const latitude = Number(req.headers.latitude);
   // longitude of client
@@ -61,11 +62,6 @@ export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
 
 export const createProperty = catchAsyncErrors(async (req, res, next) => {
   console.log('Body: ', req.body);
-  // parsed boolean strings since multer won't
-  // parseStringToBoolean(req.body, 'cuisine', 'pool', 'fenced');
-
-  // parse location object
-  // req.body.location = JSON.parse(req.body.location);
 
   // create new property
   const property = new Property(req.body);
@@ -85,20 +81,8 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
   // associate property to it's owner
   property.ownerId = req.account.id;
 
-  // property uploaded images
-  // let images = req.files || [];
-
-  // console.log(images);
-
   // save property to DB
   await property.save();
-
-  // upload property images to S3 bucket
-  // const hasUploaded = await uploadPropertyImages(images, property, next);
-
-  // send success response if succesfull upload if not error has already been sent prevent sending response 2x
-  // or will cause cannot set Headers after sent errors
-  // hasUploaded &&
 
   res.status(201).json(property);
 });
@@ -229,21 +213,21 @@ export const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  const hasUploaded = await uploadPropertyImages(
-    uploadedImages,
-    property,
-    next
-  );
+  await uploadPropertyImages(uploadedImages, property);
 
-  hasUploaded && res.json(property);
+  res.json(property);
 });
 
-export const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
+export const removePropertyImages = catchAsyncErrors(async (req, res, next) => {
   // account
   const { account } = req;
 
   // imageName and propertyId
-  const { imageName, propertyId } = req.params;
+  const { propertyId } = req.params;
+
+  const { names } = req.body;
+
+  console.log(names);
 
   // find property
   const property = await Property.findById(propertyId);
@@ -266,24 +250,20 @@ export const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
   // imageNames
   const { imagesNames } = property;
 
-  // try to find the image to be deleted
-  const image = property.imagesNames.find(
-    imageObject => imageObject.sourceName === imageName
-  );
+  for (let imageName of names) {
+    // try to find the image to be deleted
+    const image = imagesNames.find(
+      imageObject => imageObject.sourceName === imageName
+    );
 
-  if (!image) {
-    return next(
-      new ServerError('This image does not exist on our server', 404)
+    // remove image and all it's duplicates from s3
+    await removeFroms3(image.names);
+
+    // remove image info from db
+    property.imagesNames = property.imagesNames.filter(
+      imageObject => imageObject.sourceName !== imageName
     );
   }
-
-  // remove image and all it's duplicates from s3
-  await removeFroms3(image.names);
-
-  // remove image info from db
-  property.imagesNames = imagesNames.filter(
-    imageObject => imageObject.sourceName !== imageName
-  );
 
   await property.save();
 

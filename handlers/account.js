@@ -81,7 +81,8 @@ export const signin = catchAsyncErrors(async (req, res, next) => {
 
   // if logged in token + this login token > specified
   // wipe old tokens to logout previous devices
-  if (tokensLength + 1 > Number(process.env.MAX_LOGIN_TOKENS) || 10) {
+
+  if (tokensLength + 1 > parseInt(process.env.MAX_LOGIN_TOKENS || 5)) {
     account.tokens = [];
   }
   // store token

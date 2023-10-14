@@ -102,7 +102,7 @@ const propertySchema = new mongoose.Schema(
       required: [true, 'A property needs a title'],
     },
     // description
-    story: {
+    description: {
       type: String,
     },
     status: {
@@ -280,13 +280,13 @@ propertySchema.virtual('owner', {
 propertySchema.virtual('images').get(function () {
   const property = this;
   const { imagesNames } = property;
-  const baseURI = process.env.CLOUDFRONT_URL;
+  const { CLOUDFRONT_URL } = process.env;
 
-  return imagesNames.map(image => {
+  return imagesNames.map(({ sourceName, names }) => {
     return {
-      sourceName: image.sourceName,
-      src: `${baseURI}/${image.sourceName}`,
-      srcset: image.names.map(name => `${baseURI}/${name}`),
+      sourceName: sourceName,
+      src: `${CLOUDFRONT_URL}/${sourceName}`,
+      srcset: names.map(name => `${CLOUDFRONT_URL}/${name}`),
     };
   });
 });

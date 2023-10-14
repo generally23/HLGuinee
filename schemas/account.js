@@ -109,7 +109,7 @@ accountSchema.pre('save', async function (next) {
 
   console.log(password);
 
-  if (password < passwordLength || passwordLength > maxlength) {
+  if (passwordLength < minlength || passwordLength > maxlength) {
     return next(
       new ServerError('Your password is either too short or too long', 400)
     );

@@ -131,7 +131,7 @@ export const uploadAvatar = async (file, account, next) => {
   }
 };
 
-export const uploadPropertyImages = async (images, property, next) => {
+export const uploadPropertyImages = async (images, property) => {
   for (let image of images) {
     // rename property images
     image.originalname = `property-img-${uniqid()}`;
@@ -145,7 +145,7 @@ export const uploadPropertyImages = async (images, property, next) => {
 
     // send error if images are not clear (hd)
     if (!isHighRes) {
-      return next(new ServerError('Please upload high resolution images', 400));
+      throw new ServerError('Please upload high resolution images', 400);
     }
 
     // convert property image to webp to optimize images for web use

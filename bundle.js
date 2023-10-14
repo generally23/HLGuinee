@@ -283,7 +283,7 @@ const uploadAvatar = async (file, account, next) => {
   }
 };
 
-const uploadPropertyImages = async (images, property, next) => {
+const uploadPropertyImages = async (images, property) => {
   for (let image of images) {
     // rename property images
     image.originalname = `property-img-${uniqid()}`;
@@ -297,7 +297,7 @@ const uploadPropertyImages = async (images, property, next) => {
 
     // send error if images are not clear (hd)
     if (!isHighRes) {
-      return next(new ServerError('Please upload high resolution images', 400));
+      throw new ServerError('Please upload high resolution images', 400);
     }
 
     // convert property image to webp to optimize images for web use
@@ -571,7 +571,7 @@ const propertySchema = new mongoose.Schema(
       required: [true, 'A property needs a title'],
     },
     // description
-    story: {
+    description: {
       type: String,
     },
     status: {
@@ -749,13 +749,13 @@ propertySchema.virtual('owner', {
 propertySchema.virtual('images').get(function () {
   const property = this;
   const { imagesNames } = property;
-  const baseURI = process.env.CLOUDFRONT_URL;
+  const { CLOUDFRONT_URL } = process.env;
 
-  return imagesNames.map(image => {
+  return imagesNames.map(({ sourceName, names }) => {
     return {
-      sourceName: image.sourceName,
-      src: `${baseURI}/${image.sourceName}`,
-      srcset: image.names.map(name => `${baseURI}/${name}`),
+      sourceName: sourceName,
+      src: `${CLOUDFRONT_URL}/${sourceName}`,
+      srcset: names.map(name => `${CLOUDFRONT_URL}/${name}`),
     };
   });
 });
@@ -779,6 +779,7 @@ Property.on('index', e => {
 });
 
 const fetchProperties = catchAsyncErrors(async (req, res, next) => {
+  console.log(req.query);
   // latitude of client
   const latitude = Number(req.headers.latitude);
   // longitude of client
@@ -831,11 +832,6 @@ const fetchProperties = catchAsyncErrors(async (req, res, next) => {
 
 const createProperty = catchAsyncErrors(async (req, res, next) => {
   console.log('Body: ', req.body);
-  // parsed boolean strings since multer won't
-  // parseStringToBoolean(req.body, 'cuisine', 'pool', 'fenced');
-
-  // parse location object
-  // req.body.location = JSON.parse(req.body.location);
 
   // create new property
   const property = new Property(req.body);
@@ -855,20 +851,8 @@ const createProperty = catchAsyncErrors(async (req, res, next) => {
   // associate property to it's owner
   property.ownerId = req.account.id;
 
-  // property uploaded images
-  // let images = req.files || [];
-
-  // console.log(images);
-
   // save property to DB
   await property.save();
-
-  // upload property images to S3 bucket
-  // const hasUploaded = await uploadPropertyImages(images, property, next);
-
-  // send success response if succesfull upload if not error has already been sent prevent sending response 2x
-  // or will cause cannot set Headers after sent errors
-  // hasUploaded &&
 
   res.status(201).json(property);
 });
@@ -999,21 +983,21 @@ const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  const hasUploaded = await uploadPropertyImages(
-    uploadedImages,
-    property,
-    next
-  );
+  await uploadPropertyImages(uploadedImages, property);
 
-  hasUploaded && res.json(property);
+  res.json(property);
 });
 
-const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
+const removePropertyImages = catchAsyncErrors(async (req, res, next) => {
   // account
   const { account } = req;
 
   // imageName and propertyId
-  const { imageName, propertyId } = req.params;
+  const { propertyId } = req.params;
+
+  const { names } = req.body;
+
+  console.log(names);
 
   // find property
   const property = await Property.findById(propertyId);
@@ -1036,24 +1020,20 @@ const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
   // imageNames
   const { imagesNames } = property;
 
-  // try to find the image to be deleted
-  const image = property.imagesNames.find(
-    imageObject => imageObject.sourceName === imageName
-  );
+  for (let imageName of names) {
+    // try to find the image to be deleted
+    const image = imagesNames.find(
+      imageObject => imageObject.sourceName === imageName
+    );
 
-  if (!image) {
-    return next(
-      new ServerError('This image does not exist on our server', 404)
+    // remove image and all it's duplicates from s3
+    await removeFroms3(image.names);
+
+    // remove image info from db
+    property.imagesNames = property.imagesNames.filter(
+      imageObject => imageObject.sourceName !== imageName
     );
   }
-
-  // remove image and all it's duplicates from s3
-  await removeFroms3(image.names);
-
-  // remove image info from db
-  property.imagesNames = imagesNames.filter(
-    imageObject => imageObject.sourceName !== imageName
-  );
 
   await property.save();
 
@@ -1152,6 +1132,9 @@ accountSchema.pre('save', async function (next) {
   const account = this;
   // move to next midware if password hasn't changed
   if (!account.isModified('password')) return next();
+  // min and max length required because pwd is being modified to hash pre save, and hash is long
+  // pwd minlength
+  const minlength = 8;
   // pwd max length
   const maxlength = 32;
 
@@ -1161,7 +1144,7 @@ accountSchema.pre('save', async function (next) {
 
   console.log(password);
 
-  if (password < passwordLength || passwordLength > maxlength) {
+  if (passwordLength < minlength || passwordLength > maxlength) {
     return next(
       new ServerError('Your password is either too short or too long', 400)
     );
@@ -1342,10 +1325,10 @@ router$2.post(
 );
 
 // remove a property image
-router$2.delete(
-  `${propertyRoute}/images/:imageName`,
+router$2.post(
+  `${propertyRoute}/images/delete`,
   authenticate(),
-  removePropertyImage
+  removePropertyImages
 );
 
 // SYSTEM SPECIFIC ROUTES
@@ -1422,7 +1405,8 @@ const signin = catchAsyncErrors(async (req, res, next) => {
 
   // if logged in token + this login token > specified
   // wipe old tokens to logout previous devices
-  if (tokensLength + 1 > Number(process.env.MAX_LOGIN_TOKENS) || 10) {
+
+  if (tokensLength + 1 > parseInt(process.env.MAX_LOGIN_TOKENS || 5)) {
     account.tokens = [];
   }
   // store token
