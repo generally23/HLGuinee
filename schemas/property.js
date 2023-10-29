@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { deleteProps } from '../utils';
+import { deleteProps, formatSrset } from '../utils';
 
 const imageSchema = new mongoose.Schema({
   sourceName: {
@@ -48,9 +48,9 @@ const propertySchema = new mongoose.Schema(
     price: {
       type: Number,
       required: [true, 'A property needs a price'],
-      min: [5000000, 'A property price cannot be less than this amount'],
+      min: [5_000_000, 'A property price cannot be less than this amount'],
       // price must not be past billions
-      max: [900000000000, 'A property price cannot exceed this amount'],
+      max: [900_000_000_000, 'A property price cannot exceed this amount'],
     },
     location: {
       type: locationSchema,
@@ -253,7 +253,7 @@ const propertySchema = new mongoose.Schema(
         message: 'Pool is only for a house',
       },
     },
-    tags: String,
+    tags: [String],
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
@@ -283,10 +283,11 @@ propertySchema.virtual('images').get(function () {
   const { CLOUDFRONT_URL } = process.env;
 
   return imagesNames.map(({ sourceName, names }) => {
+    const smallestImage = names[0];
     return {
       sourceName: sourceName,
-      src: `${CLOUDFRONT_URL}/${sourceName}`,
-      srcset: names.map(name => `${CLOUDFRONT_URL}/${name}`),
+      src: `${CLOUDFRONT_URL}/${smallestImage}`,
+      srcset: formatSrset(names.map(name => `${CLOUDFRONT_URL}/${name}`)),
     };
   });
 });

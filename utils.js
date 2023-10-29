@@ -6,6 +6,9 @@ import uniqid from 'uniqid';
 import { sign } from 'jsonwebtoken';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
+import fs from 'fs/promises';
+import path from 'path';
+import { booleanPointInPolygon, point, polygon } from '@turf/turf';
 
 export const objectAssign = (source, target) => {
   if (!source || !target) {
@@ -326,3 +329,203 @@ export const parseStringToBoolean = (source = {}, ...properties) => {
   }
   return source;
 };
+
+export const formatSrset = srcSet => {
+  srcSet = !srcSet ? [] : srcSet;
+
+  let formatted = '';
+
+  const { length } = srcSet;
+
+  for (let i = 0; i < length; i++) {
+    // get current source
+    const source = srcSet[i];
+
+    // split url string by -
+    const parts = source.split('-');
+
+    // width is the last item and is a string number
+    const width = parts[parts.length - 1];
+
+    // formatted will add newly constructed string with a comma and a space if not last item
+    formatted +=
+      i < length - 1
+        ? `${parts.join('-')} ${width}w, `
+        : `${parts.join('-')} ${width}w`;
+  }
+
+  return formatted;
+};
+
+export const insideGuinea = async ({ longitude, latitude }) => {
+  try {
+    // read file
+    const file = await fs.readFile(
+      path.resolve(`${__dirname}/public/assets/guinea.geojson`)
+    );
+
+    // parse file to json
+    const parsedFile = JSON.parse(file);
+
+    // get coordinates from file
+    const coordinates = parsedFile.features[0].geometry.coordinates;
+
+    const place = point([longitude, latitude]);
+
+    const area = polygon(coordinates);
+
+    return booleanPointInPolygon(place, area);
+  } catch (e) {
+    throw e;
+  }
+};
+
+export const isNearGuinea = coordinates => {
+  if (!coordinates || coordinates.length !== 2) return false;
+
+  const place = point(coordinates);
+
+  const area = polygon([
+    [
+      [-15.1303112452, 7.3090373804],
+      [-7.83210038902, 7.3090373804],
+      [-7.83210038902, 12.5861829696],
+      [-15.1303112452, 12.5861829696],
+      [-15.1303112452, 7.3090373804],
+    ],
+  ]);
+
+  return booleanPointInPolygon(place, area);
+};
+
+export const buildSearchStage = (
+  searchTerm,
+  { longitude, latitude, radius }
+) => {
+  const coordinates = [longitude, latitude];
+  // check to see if the user is inside guinea's bounding box
+  const isGeoSearchAllowed =
+    longitude && latitude ? isNearGuinea(coordinates) : false;
+
+  const textStage = {
+    $search: {
+      index: '',
+      text: {
+        query: searchTerm,
+        path: ['title', 'tags'],
+      },
+    },
+  };
+
+  const geoStage = {
+    $search: {
+      index: '',
+      geoWithin: {
+        circle: {
+          center: {
+            type: 'Point',
+            coordinates: coordinates,
+          },
+          radius,
+        },
+        path: 'location',
+      },
+    },
+  };
+
+  // user has not serched for anything and they're not allowed to geo search
+  if (!searchTerm && !isGeoSearchAllowed) return;
+
+  if (searchTerm && isGeoSearchAllowed) {
+    // use th readius to determine which order to carry out query
+    return {
+      $search: {
+        index: '',
+        compound: {
+          must: [textStage, geoStage],
+        },
+      },
+    };
+  }
+
+  if (searchTerm && !isGeoSearchAllowed) return textStage;
+
+  if (!searchTerm && isGeoSearchAllowed) return geoStage;
+};
+
+export const buildFilterStage = query => {
+  const filterObject = {};
+
+  const filters = [
+    'type',
+    'title',
+    'price',
+    'area',
+    'areaBuilt',
+    'yearBuilt',
+    'fenced',
+    'hasBathroom',
+    'hasGarage',
+    'hasCuisine',
+    'hasLivingRoom',
+    'hasDiningRoom',
+    'hasPool',
+    'rooms',
+    'externalBathrooms',
+    'internalBathrooms',
+  ];
+
+  for (let filter of filters) filterObject[filter] = query[filter];
+
+  const regexp = /(lte)|(gte)/g;
+
+  const filterObjectString = JSON.stringify(filterObject).replace(
+    regexp,
+    value => `$${value}`
+  );
+
+  return {
+    $match: JSON.parse(filterObjectString),
+  };
+};
+
+export const buildSortStage = string => {
+  if (!string) return;
+
+  const sortObject = {};
+
+  // -createdAt createdAt
+  const firstLetter = string[0];
+
+  if (firstLetter === '-') {
+    // copy string but exclude the -
+    const propertyName = string.slice(1);
+    // set sortObject to decending
+    sortObject[propertyName] = -1;
+  }
+  // set sortObject property to ascending
+  else sortObject[string] = 1;
+  // return stage
+  return {
+    $sort: sortObject,
+  };
+};
+
+export const buildLimitStage = limit => {
+  const maxLimit = 100;
+
+  const numberLimit = parseInt(limit);
+
+  limit = numberLimit <= maxLimit ? numberLimit : maxLimit;
+
+  return { $limit: limit };
+};
+
+export const skipStage = page => {};
+
+// export const buildLimitStage = limit => {
+
+// }
+
+// this takes stages and exclude empty stage
+export const buildPipeline = (...stages) => stages.filter(stage => stage);

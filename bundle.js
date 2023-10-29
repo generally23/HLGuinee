@@ -15,6 +15,8 @@ var uniqid = require('uniqid');
 var jsonwebtoken = require('jsonwebtoken');
 var crypto = require('crypto');
 var nodemailer = require('nodemailer');
+var fs = require('fs/promises');
+var turf = require('@turf/turf');
 var argon = require('argon2');
 var emailValidator = require('email-validator');
 require('axios');
@@ -470,6 +472,56 @@ const generateDfPassword = (fn = '', ln = '') => {
   return `PASS-${fn.slice(0, 2)}${ln.slice(0, 2)}`;
 };
 
+const formatSrset = srcSet => {
+  srcSet = !srcSet ? [] : srcSet;
+
+  let formatted = '';
+
+  const { length } = srcSet;
+
+  for (let i = 0; i < length; i++) {
+    // get current source
+    const source = srcSet[i];
+
+    // split url string by -
+    const parts = source.split('-');
+
+    // width is the last item and is a string number
+    const width = parts[parts.length - 1];
+
+    // formatted will add newly constructed string with a comma and a space if not last item
+    formatted +=
+      i < length - 1
+        ? `${parts.join('-')} ${width}w, `
+        : `${parts.join('-')} ${width}w`;
+  }
+
+  return formatted;
+};
+
+const insideGuinea = async ({ longitude, latitude }) => {
+  try {
+    // read file
+    const file = await fs.readFile(
+      path.resolve(`${__dirname}/public/assets/guinea.geojson`)
+    );
+
+    // parse file to json
+    const parsedFile = JSON.parse(file);
+
+    // get coordinates from file
+    const coordinates = parsedFile.features[0].geometry.coordinates;
+
+    const place = turf.point([longitude, latitude]);
+
+    const area = turf.polygon(coordinates);
+
+    return turf.booleanPointInPolygon(place, area);
+  } catch (e) {
+    throw e;
+  }
+};
+
 const imageSchema = new mongoose.Schema({
   sourceName: {
     type: String,
@@ -517,9 +569,9 @@ const propertySchema = new mongoose.Schema(
     price: {
       type: Number,
       required: [true, 'A property needs a price'],
-      min: [5000000, 'A property price cannot be less than this amount'],
+      min: [5_000_000, 'A property price cannot be less than this amount'],
       // price must not be past billions
-      max: [900000000000, 'A property price cannot exceed this amount'],
+      max: [900_000_000_000, 'A property price cannot exceed this amount'],
     },
     location: {
       type: locationSchema,
@@ -722,7 +774,7 @@ const propertySchema = new mongoose.Schema(
         message: 'Pool is only for a house',
       },
     },
-    tags: String,
+    tags: [String],
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
@@ -752,10 +804,11 @@ propertySchema.virtual('images').get(function () {
   const { CLOUDFRONT_URL } = process.env;
 
   return imagesNames.map(({ sourceName, names }) => {
+    const smallestImage = names[0];
     return {
       sourceName: sourceName,
-      src: `${CLOUDFRONT_URL}/${sourceName}`,
-      srcset: names.map(name => `${CLOUDFRONT_URL}/${name}`),
+      src: `${CLOUDFRONT_URL}/${smallestImage}`,
+      srcset: formatSrset(names.map(name => `${CLOUDFRONT_URL}/${name}`)),
     };
   });
 });
@@ -779,13 +832,16 @@ Property.on('index', e => {
 });
 
 const fetchProperties = catchAsyncErrors(async (req, res, next) => {
-  console.log(req.query);
+  console.log('Request Query: ', req.query);
   // latitude of client
-  const latitude = Number(req.headers.latitude);
+  const latitude = parseFloat(req.headers.latitude);
   // longitude of client
-  const longitude = Number(req.headers.longitude);
-  // radius default to 1000 meters for now
-  Number(req.headers.radius) || 1000;
+  const longitude = parseFloat(req.headers.longitude);
+  // radius is in km convert it to meters 1km => 1000m
+  const radius = parseInt(req.headers.radius) * 1000 || 10_000;
+
+  console.log('Lng: ', longitude, 'Lat: ', latitude, 'Radius: ', radius);
+
   // this filter finds properties near a given client location
   const geoFilter = {
     location: {
@@ -796,7 +852,7 @@ const fetchProperties = catchAsyncErrors(async (req, res, next) => {
     },
   };
 
-  const { search, type, documented, page = 1, limit = 15 } = req.query;
+  const { search, type, documented, page = 1, limit = 100 } = req.query;
   // object containg search query
   const searchObject = {};
   // search query
@@ -831,7 +887,19 @@ const fetchProperties = catchAsyncErrors(async (req, res, next) => {
 });
 
 const createProperty = catchAsyncErrors(async (req, res, next) => {
-  console.log('Body: ', req.body);
+  const { location } = req.body;
+
+  // send an error if no location is passed
+  if (!location)
+    return next(
+      new ServerError('Cannot create a property without a location', 400)
+    );
+
+  // check to see if coordinates are in Guinea
+  const fullyInGuinea = await insideGuinea(location.coordinates);
+
+  if (!fullyInGuinea)
+    return new ServerError('Cannot create a property outside of Guinea', 400);
 
   // create new property
   const property = new Property(req.body);
@@ -845,8 +913,6 @@ const createProperty = catchAsyncErrors(async (req, res, next) => {
 
   // promo is still running
   if (promoStartDate + promoPeriod > Date.now()) property.published = true;
-
-  console.log('Published: ', property.published);
 
   // associate property to it's owner
   property.ownerId = req.account.id;

@@ -2,20 +2,29 @@ import { ServerError, catchAsyncErrors } from './errors';
 import Property from '../schemas/property';
 import { removeFroms3 } from '../s3';
 import {
+  Pipeline,
+  buildFilterStage,
+  buildPipeline,
+  buildSearchStage,
+  buildSortStage,
+  insideGuinea,
+  isNearGuinea,
   objectAssign,
   paginateModel,
-  parseStringToBoolean,
   uploadPropertyImages,
 } from '../utils';
 
 export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
-  console.log(req.query);
+  console.log('Request Query: ', req.query);
   // latitude of client
-  const latitude = Number(req.headers.latitude);
+  const latitude = parseFloat(req.headers.latitude);
   // longitude of client
-  const longitude = Number(req.headers.longitude);
-  // radius default to 1000 meters for now
-  const radius = Number(req.headers.radius) || 1000;
+  const longitude = parseFloat(req.headers.longitude);
+  // radius is in km convert it to meters 1km => 1000m
+  const radius = parseInt(req.headers.radius) * 1000 || 10_000;
+
+  console.log('Lng: ', longitude, 'Lat: ', latitude, 'Radius: ', radius);
+
   // this filter finds properties near a given client location
   const geoFilter = {
     location: {
@@ -26,7 +35,7 @@ export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
     },
   };
 
-  const { search, type, documented, page = 1, limit = 15 } = req.query;
+  const { search, type, documented, page = 1, limit = 100 } = req.query;
   // object containg search query
   const searchObject = {};
   // search query
@@ -60,8 +69,52 @@ export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
   res.json(data);
 });
 
+export const fetchProperties2 = catchAsyncErrors(async (req, res, next) => {
+  // latitude of client
+  const latitude = parseFloat(req.headers.latitude);
+  // longitude of client
+  const longitude = parseFloat(req.headers.longitude);
+  // radius is in km convert it to meters 1km => 1000m
+  const radius = parseInt(req.headers.radius) * 1000 || 500_000;
+
+  console.log('Lng: ', longitude, 'Lat: ', latitude, 'Radius: ', radius);
+
+  const { search, sortBy, limit, page } = req.query;
+
+  // search stage
+  const searchStage = buildSearchStage(search, { longitude, latitude, radius });
+
+  // filter stage
+  const filterStage = buildFilterStage(req.query);
+
+  // sort stage
+  const sortStage = buildSortStage(sortBy);
+
+  // contains pagination info
+  const pagination = {};
+  // paginate data
+
+  const pipeline = buildPipeline(searchStage, filterStage, sortStage);
+
+  const properties = await Property.aggregate(pipeline);
+
+  res.json(properties);
+});
+
 export const createProperty = catchAsyncErrors(async (req, res, next) => {
-  console.log('Body: ', req.body);
+  const { location } = req.body;
+
+  // send an error if no location is passed
+  if (!location)
+    return next(
+      new ServerError('Cannot create a property without a location', 400)
+    );
+
+  // check to see if coordinates are in Guinea
+  const fullyInGuinea = await insideGuinea(location.coordinates);
+
+  if (!fullyInGuinea)
+    return new ServerError('Cannot create a property outside of Guinea', 400);
 
   // create new property
   const property = new Property(req.body);
@@ -75,8 +128,6 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
 
   // promo is still running
   if (promoStartDate + promoPeriod > Date.now()) property.published = true;
-
-  console.log('Published: ', property.published);
 
   // associate property to it's owner
   property.ownerId = req.account.id;
