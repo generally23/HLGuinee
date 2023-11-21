@@ -28,15 +28,17 @@ const accountSchema = new mongoose.Schema(
       unique: [true, 'Email already exist'],
       lowercase: true,
       validate: {
-        validator(value) {
-          return emailValidator.validate(value);
-        },
+        validator: value => emailValidator.validate(value),
         message: 'Invalid email address',
       },
     },
-    contacts: {
-      type: [{ type: String, required: true }],
-      validate: [numbers => numbers.length <= 3, 'Phone numbers max out at 3'],
+    phoneNumber: {
+      type: String,
+      // validate phone number
+      validate: {
+        validator: value => /^[67][05678]\d{7}$/.test(value),
+        message: 'Invalid phone number',
+      },
     },
     role: {
       type: String,

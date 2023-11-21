@@ -11,6 +11,11 @@ const searchStage = {
   },
 };
 
+db.properties.updateOne(
+  { _id: ObjectId('652709af103c91372fab83fb') },
+  { $set: { 'location.coordinates': [-13.516692405831321, 9.788094124928804] } }
+);
+
 const pipeline = [
   searchStage,
 

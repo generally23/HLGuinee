@@ -15,12 +15,13 @@ var uniqid = require('uniqid');
 var jsonwebtoken = require('jsonwebtoken');
 var crypto = require('crypto');
 var nodemailer = require('nodemailer');
-var fs = require('fs/promises');
-var turf = require('@turf/turf');
+require('fs/promises');
+require('@turf/turf');
 var argon = require('argon2');
 var emailValidator = require('email-validator');
 require('axios');
 var dotenv = require('dotenv');
+var expressQueryParser = require('express-query-parser');
 
 const router$3 = express.Router();
 
@@ -263,7 +264,7 @@ const convertToWebp = async (file, quality = 100) => {
   return file;
 };
 
-const uploadAvatar = async (file, account, next) => {
+const uploadAvatar = async (file, account) => {
   if (file && account) {
     // change avatar name
     file.originalname = `avatar-${account.id}`;
@@ -332,109 +333,6 @@ const uploadPropertyImages = async (images, property) => {
     // persist to db
     await property.save();
   }
-  return true;
-};
-
-// create pages array out of a number of pages
-const createPages = numPages => {
-  let firstPage = 1;
-  const pages = [];
-  for (let i = firstPage; i <= numPages; i++) {
-    pages.push(i);
-  }
-  return pages;
-};
-
-const paginateModel = async (
-  Model,
-  searchObject = {},
-  filterObject = {},
-  sortStr = '',
-  /* paging info */ { page, limit },
-  // all these must be populated
-  ...populates
-) => {
-  // variables
-  let docs;
-  let docsCount;
-  let query;
-  let matches;
-  let matchesIds;
-  // find documents length
-  const searchObjectLength = Object.values(searchObject).length;
-
-  if (searchObjectLength) {
-    matches = await Model.find(searchObject);
-    matchesIds = matches.map(match => match._id);
-
-    const documents = await Model.find({
-      _id: { $in: matchesIds },
-      ...filterObject,
-    });
-
-    docsCount = documents.length;
-  } else {
-    // we didn't use countDocuments here because it doesn't support $nearSphere
-    const documents = await Model.find(filterObject);
-    docsCount = documents.length;
-  }
-
-  // get paging info
-  page = Number(page);
-  limit = Number(limit);
-
-  // sanitize user input
-  if (isNaN(page) || page < 1) page = 1;
-
-  if (isNaN(limit) || limit < 15) limit = 15;
-
-  let firstPage = 1;
-  let pages = Math.ceil(docsCount / limit);
-  let lastPage = pages;
-
-  const prevPage = firstPage < page ? page - 1 : null;
-  const nextPage = lastPage > page ? page + 1 : null;
-
-  const read = page - firstPage;
-  const toread = lastPage - page;
-
-  const skip = (page - 1) * limit;
-
-  if (searchObjectLength) {
-    query = Model.find({ _id: { $in: matchesIds }, ...filterObject })
-      .sort(sortStr)
-      .skip(skip)
-      .limit(limit);
-
-    populates.forEach(population => query.populate(population));
-
-    docs = await query;
-  } else {
-    query = Model.find(filterObject).sort(sortStr).skip(skip).limit(limit);
-
-    populates.forEach(population => query.populate(population));
-
-    docs = await query;
-  }
-
-  const docsLength = docs.length;
-
-  console.log('Total Results: ', docsCount);
-
-  return {
-    page,
-    pageCount: pages,
-    pages: createPages(pages),
-    nextPage,
-    prevPage,
-    read,
-    toread,
-    docs,
-    totalResults: docsCount,
-    firstPage,
-    lastPage,
-    docsLength,
-  };
 };
 
 const sendEmail = async content => {
@@ -499,27 +397,208 @@ const formatSrset = srcSet => {
   return formatted;
 };
 
-const insideGuinea = async ({ longitude, latitude }) => {
-  try {
-    // read file
-    const file = await fs.readFile(
-      path.resolve(`${__dirname}/public/assets/guinea.geojson`)
-    );
+const isGeoSearchAllowed = (
+  longitude,
+  latitude,
+  northEastBounds,
+  southWestBounds
+) => {
+  return (
+    longitude &&
+    latitude &&
+    northEastBounds &&
+    northEastBounds.length === 2 &&
+    southWestBounds &&
+    southWestBounds.length === 2
+  );
+};
 
-    // parse file to json
-    const parsedFile = JSON.parse(file);
+const buildSearchStage = (
+  searchTerm,
+  { longitude, latitude, northEastBounds, southWestBounds }
+) => {
+  console.log('northEastBounds', northEastBounds);
+  console.log('southWestBounds', southWestBounds);
 
-    // get coordinates from file
-    const coordinates = parsedFile.features[0].geometry.coordinates;
+  // mongodb atlas search index name
+  const index = 'main_search';
+  // check to see if the user is inside guinea's bounding box
+  const geoSearchAllowed = isGeoSearchAllowed(
+    longitude,
+    latitude,
+    northEastBounds,
+    southWestBounds
+  );
 
-    const place = turf.point([longitude, latitude]);
+  // search stage
+  const searchStage = { $search: { index } };
 
-    const area = turf.polygon(coordinates);
+  // geo search query
+  const geoQuery = {
+    path: 'location',
+    box: {
+      bottomLeft: {
+        type: 'Point',
+        coordinates: southWestBounds,
+      },
+      topRight: {
+        type: 'Point',
+        coordinates: northEastBounds,
+      },
+    },
+  };
 
-    return turf.booleanPointInPolygon(place, area);
-  } catch (e) {
-    throw e;
+  // user has not serched for anything and they're not allowed to geo search
+  if (!searchTerm && !geoSearchAllowed) return;
+  // user is only text searching if there's a search term
+  // if (searchTerm) searchStage.$search.text = textQuery;
+  // user is only geo searching when search term is missing & geo search is allowed
+  else if (geoSearchAllowed) searchStage.$search.geoWithin = geoQuery;
+
+  // return built search stage based on above scenarios
+  return searchStage;
+};
+
+const buildFilterStage = query => {
+  const filterObject = {};
+
+  const filters = [
+    'type',
+    'title',
+    'price',
+    'area',
+    'areaBuilt',
+    'yearBuilt',
+    'fenced',
+    'hasBathroom',
+    'hasGarage',
+    'hasCuisine',
+    'hasLivingRoom',
+    'hasDiningRoom',
+    'hasPool',
+    'rooms',
+    'externalBathrooms',
+    'internalBathrooms',
+  ];
+
+  for (let filter of filters) filterObject[filter] = query[filter];
+
+  const regexp = /(lte)|(gte)/g;
+
+  const filterObjectString = JSON.stringify(filterObject).replace(
+    regexp,
+    value => `$${value}`
+  );
+
+  return {
+    $match: JSON.parse(filterObjectString),
+  };
+};
+
+const buildSortStage = string => {
+  if (!string) return;
+
+  const sortObject = {};
+
+  // -createdAt createdAt
+  const firstLetter = string[0];
+
+  if (firstLetter === '-') {
+    // copy string but exclude the -
+    const propertyName = string.slice(1);
+    // set sortObject to decending
+    sortObject[propertyName] = -1;
   }
+  // set sortObject property to ascending
+  else sortObject[string] = 1;
+  // return stage
+
+  return {
+    $sort: sortObject,
+  };
+};
+
+const ownerLookupStage = [
+  {
+    $lookup: {
+      from: 'accounts',
+      localField: 'ownerId',
+      foreignField: '_id',
+      as: 'owner',
+    },
+  },
+  {
+    $set: {
+      owner: { $arrayElemAt: ['$owner', 0] },
+    },
+  },
+];
+
+const between = (num, min, max) => {
+  if (num < min) num = min;
+  if (num > max) num = max;
+  return num;
+};
+
+const calculatePagination = (total, page = 1, limit) => {
+  // minimum limit permitted
+  const minLimit = 1;
+  // maximum limit permitted
+  const maxLimit = 200;
+  // parsed limit defaults to 50 if not provided
+  const limitInt = parseInt(limit) || 100;
+  // get limit number between min & max
+  limit = between(limitInt, minLimit, maxLimit);
+
+  const pageInt = parseInt(page) || 1;
+  // minimum page permitted
+  const firstPage = total > 0 ? 1 : 0;
+  // calculated number of pages
+  const pages = Math.ceil(total / limit);
+  // maximum page permitted
+  const lastPage = pages;
+  // get page number between min & max
+  page = between(pageInt, firstPage, lastPage);
+
+  // calculate prev
+  const prevPage = firstPage < page ? page - 1 : null;
+  // calculate next
+  const nextPage = lastPage > page ? page + 1 : null;
+
+  // calculate skip
+  let skip = (page - 1) * limit;
+
+  // make sure skip is not negative
+  skip = skip >= 0 ? skip : 0;
+
+  // return pagination info
+  return {
+    limit,
+    page,
+    total,
+    prevPage,
+    nextPage,
+    skip,
+  };
+};
+
+// this takes stages and exclude empty stage
+const buildPipeline = (...stages) => stages.filter(stage => stage);
+
+const preProcessImage = property => {
+  if (!property) return;
+
+  const { CLOUDFRONT_URL } = process.env;
+  const { imagesNames } = property;
+
+  return imagesNames.map(({ sourceName, names }) => {
+    const smallestImage = names[0];
+    return {
+      sourceName: sourceName,
+      src: `${CLOUDFRONT_URL}/${smallestImage}`,
+      srcset: formatSrset(names.map(name => `${CLOUDFRONT_URL}/${name}`)),
+    };
+  });
 };
 
 const imageSchema = new mongoose.Schema({
@@ -542,7 +621,6 @@ const locationSchema = new mongoose.Schema({
     required: [true],
     validator: {
       validate(value) {
-        console.log(value);
         return value.length === 2;
       },
       message: 'Coordinates need a Longitude and a Latitude',
@@ -550,6 +628,13 @@ const locationSchema = new mongoose.Schema({
   },
 });
 
+// helper functions
+
+// create ascending & desc index in a field in one go
+const createAscDescIndex = (schema, field) => {
+  schema.index({ [field]: 1 });
+  schema.index({ [field]: -1 });
+};
 // house validator
 const validator = value => value !== 'house';
 
@@ -780,15 +865,18 @@ const propertySchema = new mongoose.Schema(
 );
 
 // indexes
-propertySchema.index({
-  title: 'text',
-  story: 'text',
-  tags: 'text',
-});
 
-propertySchema.index({
-  location: '2dsphere',
-});
+// propertySchema.index({
+//   location: '2dsphere',
+// });
+
+// Index all sortable fields
+
+createAscDescIndex(propertySchema, 'price');
+createAscDescIndex(propertySchema, 'title');
+createAscDescIndex(propertySchema, 'rooms');
+// createAscDescIndex(propertySchema, 'address');
+createAscDescIndex(propertySchema, 'area');
 
 // virtuals
 propertySchema.virtual('owner', {
@@ -799,21 +887,9 @@ propertySchema.virtual('owner', {
 });
 
 propertySchema.virtual('images').get(function () {
-  const property = this;
-  const { imagesNames } = property;
-  const { CLOUDFRONT_URL } = process.env;
-
-  return imagesNames.map(({ sourceName, names }) => {
-    const smallestImage = names[0];
-    return {
-      sourceName: sourceName,
-      src: `${CLOUDFRONT_URL}/${smallestImage}`,
-      srcset: formatSrset(names.map(name => `${CLOUDFRONT_URL}/${name}`)),
-    };
-  });
+  // property
+  return preProcessImage(this);
 });
-
-// hooks
 
 // methods
 propertySchema.methods.toJSON = function () {
@@ -832,58 +908,75 @@ Property.on('index', e => {
 });
 
 const fetchProperties = catchAsyncErrors(async (req, res, next) => {
-  console.log('Request Query: ', req.query);
-  // latitude of client
-  const latitude = parseFloat(req.headers.latitude);
-  // longitude of client
-  const longitude = parseFloat(req.headers.longitude);
-  // radius is in km convert it to meters 1km => 1000m
-  const radius = parseInt(req.headers.radius) * 1000 || 10_000;
+  const { north_east_bounds } = req.headers;
+  const { south_west_bounds } = req.headers;
 
-  console.log('Lng: ', longitude, 'Lat: ', latitude, 'Radius: ', radius);
+  // location of user fetching properties
+  const userLocation = {
+    // latitude of client
+    latitude: parseFloat(req.headers.latitude),
+    // longitude of client
+    longitude: parseFloat(req.headers.longitude),
 
-  // this filter finds properties near a given client location
-  const geoFilter = {
-    location: {
-      $nearSphere: {
-        $geometry: { type: 'Point', coordinates: [longitude, latitude] },
-        // $maxDistance: radius,
-      },
-    },
+    // bounds comes coupled as a comma separated string (lng,lat)
+    // split it and parse it to be a float number
+    northEastBounds: north_east_bounds
+      ? north_east_bounds.split(',').map(parseFloat)
+      : north_east_bounds,
+    southWestBounds: south_west_bounds
+      ? south_west_bounds.split(',').map(parseFloat)
+      : south_west_bounds,
   };
 
-  const { search, type, documented, page = 1, limit = 100 } = req.query;
-  // object containg search query
-  const searchObject = {};
-  // search query
-  const searchQuery = { $text: { $search: search } };
-  // only assign search query to search object when present
-  search && objectAssign(searchQuery, searchObject);
-  // contains all filters
-  const filterObject = {};
-  // only try finding properties near location if longitude and latitude is present
-  longitude && latitude && objectAssign(geoFilter, filterObject);
+  console.log('User Location: ', userLocation);
 
-  // assign if present
-  objectAssign({ type, documented }, filterObject);
+  // request queries
+  const { search, sortBy, limit, page } = req.query;
 
-  // contains sorting
-  let { sortBy } = req.query;
+  // search stage
+  const searchStage = buildSearchStage(search, userLocation);
 
-  // contains pagination info
-  const pagination = { page, limit };
-  // paginate data
+  // filter stage
+  const filterStage = buildFilterStage(req.query);
 
-  const data = await paginateModel(
-    Property,
-    searchObject,
-    filterObject,
-    sortBy,
-    pagination,
-    'owner'
-  );
+  // get properties count
+  const countPipeline = buildPipeline(searchStage, filterStage);
 
-  res.json(data);
+  const countResults = await Property.aggregate(countPipeline).count('total');
+
+  const propertyCount = countResults.length ? countResults[0].total : 0;
+
+  console.log('Property count: ', propertyCount);
+
+  // get pagination info
+  const pagination = calculatePagination(propertyCount, page, limit);
+
+  console.log(pagination);
+
+  // sort stage
+  const sortObject = buildSortStage(sortBy);
+
+  const pipeline = buildPipeline(searchStage, filterStage, sortObject);
+
+  const properties = await Property.aggregate(pipeline)
+
+    .skip(pagination.skip)
+    .limit(pagination.limit)
+    // use append because owner is an array to be transformed into an object
+    .append(ownerLookupStage);
+
+  // preprocess images for this property to serve client the right content
+  properties.forEach(property => {
+    property.images = preProcessImage(property);
+    // remove property names from the property object
+    delete property.imagesNames;
+  });
+
+  console.log('Filters: ', filterStage);
+  // console.log('Filter Stage: ', filterStage);
+  console.log('Sort Object: ', sortObject);
+
+  res.json({ ...pagination, properties });
 });
 
 const createProperty = catchAsyncErrors(async (req, res, next) => {
@@ -896,10 +989,9 @@ const createProperty = catchAsyncErrors(async (req, res, next) => {
     );
 
   // check to see if coordinates are in Guinea
-  const fullyInGuinea = await insideGuinea(location.coordinates);
+  const fullyInGuinea = true; // await insideGuinea(location.coordinates);
 
-  if (!fullyInGuinea)
-    return new ServerError('Cannot create a property outside of Guinea', 400);
+  console.log('In Guinea ?: ', fullyInGuinea);
 
   // create new property
   const property = new Property(req.body);
@@ -1049,7 +1141,12 @@ const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  await uploadPropertyImages(uploadedImages, property);
+  /* 
+    run this in the background
+    don't wait for this to finish before responding to client for better UI exp
+  */
+
+  uploadPropertyImages(uploadedImages, property);
 
   res.json(property);
 });
@@ -1092,13 +1189,16 @@ const removePropertyImages = catchAsyncErrors(async (req, res, next) => {
       imageObject => imageObject.sourceName === imageName
     );
 
-    // remove image and all it's duplicates from s3
-    await removeFroms3(image.names);
+    if (image) {
+      // remove image and all it's duplicates from s3
+      // run this in the background to save time of response
+      removeFroms3(image.names);
 
-    // remove image info from db
-    property.imagesNames = property.imagesNames.filter(
-      imageObject => imageObject.sourceName !== imageName
-    );
+      // remove image info from db
+      property.imagesNames = property.imagesNames.filter(
+        imageObject => imageObject.sourceName !== imageName
+      );
+    }
   }
 
   await property.save();
@@ -1129,15 +1229,17 @@ const accountSchema = new mongoose.Schema(
       unique: [true, 'Email already exist'],
       lowercase: true,
       validate: {
-        validator(value) {
-          return emailValidator.validate(value);
-        },
+        validator: value => emailValidator.validate(value),
         message: 'Invalid email address',
       },
     },
-    contacts: {
-      type: [{ type: String, required: true }],
-      validate: [numbers => numbers.length <= 3, 'Phone numbers max out at 3'],
+    phoneNumber: {
+      type: String,
+      // validate phone number
+      validate: {
+        validator: value => /^[67][05678]\d{7}$/.test(value),
+        message: 'Invalid phone number',
+      },
     },
     role: {
       type: String,
@@ -1367,12 +1469,10 @@ const router$2 = express.Router();
 const properties = '/properties';
 const propertyRoute = `${properties}/:propertyId`;
 
-router$2.route(properties).get(fetchProperties).post(
-  authenticate(),
-  // uploader({ files: 12 }).any(),
-  preventUnverifiedAccounts,
-  createProperty
-);
+router$2
+  .route(properties)
+  .get(fetchProperties)
+  .post(authenticate(), preventUnverifiedAccounts, createProperty);
 
 router$2.get(`${properties}/my-properties`, authenticate(), fetchMyProperties);
 
@@ -1386,7 +1486,7 @@ router$2
 router$2.post(
   `${propertyRoute}/images`,
   authenticate(),
-  uploader({ files: 12 }).any(),
+  uploader({ files: 40 }).any(),
   addPropertyImages
 );
 
@@ -1968,7 +2068,8 @@ router.use('/', router$2);
 const connectToDb = async () => {
   try {
     await mongoose.connect(
-      process.env.DATABASE_URL || 'mongodb://localhost:27017/houses&lands'
+      process.env.DATABASE_URL
+      // || 'mongodb://localhost:27017/houses&lands'
     );
     console.log('sucessfull connection to db');
 
@@ -2019,6 +2120,9 @@ const setupExpressMiddleware = server => {
 
   // parse form data
   server.use(express.urlencoded({ extended: true }));
+
+  // parse req params
+  server.use(expressQueryParser.queryParser({ parseBoolean: true, parseNumber: true }));
 
   // setup cors
   // server.use(cors());
@@ -2075,10 +2179,11 @@ const server = express();
 
 express();
 
-// connect to mongodb
-connectToDb();
 // setup express middlewares
 setupExpressMiddleware(server);
+// connect to mongodb
+connectToDb();
+
 // listen on determined port
 listen(server);
 

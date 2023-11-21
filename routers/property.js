@@ -17,12 +17,10 @@ const router = express.Router();
 const properties = '/properties';
 const propertyRoute = `${properties}/:propertyId`;
 
-router.route(properties).get(fetchProperties).post(
-  authenticate(),
-  // uploader({ files: 12 }).any(),
-  preventUnverifiedAccounts,
-  createProperty
-);
+router
+  .route(properties)
+  .get(fetchProperties)
+  .post(authenticate(), preventUnverifiedAccounts, createProperty);
 
 router.get(`${properties}/my-properties`, authenticate(), fetchMyProperties);
 
@@ -36,7 +34,7 @@ router
 router.post(
   `${propertyRoute}/images`,
   authenticate(),
-  uploader({ files: 12 }).any(),
+  uploader({ files: 40 }).any(),
   addPropertyImages
 );
 

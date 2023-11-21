@@ -16,11 +16,14 @@ import { unroutable, globalErrorHandler } from './handlers/errors';
 import Account from './schemas/account';
 import { generateDfPassword } from './utils';
 
+import { queryParser } from 'express-query-parser';
+
 // start db connection
 export const connectToDb = async () => {
   try {
     await mongoose.connect(
-      process.env.DATABASE_URL || 'mongodb://localhost:27017/houses&lands'
+      process.env.DATABASE_URL
+      // || 'mongodb://localhost:27017/houses&lands'
     );
     console.log('sucessfull connection to db');
 
@@ -71,6 +74,9 @@ export const setupExpressMiddleware = server => {
 
   // parse form data
   server.use(express.urlencoded({ extended: true }));
+
+  // parse req params
+  server.use(queryParser({ parseBoolean: true, parseNumber: true }));
 
   // setup cors
   // server.use(cors());

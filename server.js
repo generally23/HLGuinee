@@ -5,10 +5,11 @@ const server = express();
 
 const maintenanceServer = express();
 
-// connect to mongodb
-connectToDb();
 // setup express middlewares
 setupExpressMiddleware(server);
+// connect to mongodb
+connectToDb();
+
 // listen on determined port
 listen(server);
 

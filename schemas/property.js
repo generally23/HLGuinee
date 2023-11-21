@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { deleteProps, formatSrset } from '../utils';
+import { deleteProps, formatSrset, preProcessImage } from '../utils';
 
 const imageSchema = new mongoose.Schema({
   sourceName: {
@@ -21,7 +21,6 @@ const locationSchema = new mongoose.Schema({
     required: [true],
     validator: {
       validate(value) {
-        console.log(value);
         return value.length === 2;
       },
       message: 'Coordinates need a Longitude and a Latitude',
@@ -29,6 +28,13 @@ const locationSchema = new mongoose.Schema({
   },
 });
 
+// helper functions
+
+// create ascending & desc index in a field in one go
+const createAscDescIndex = (schema, field) => {
+  schema.index({ [field]: 1 });
+  schema.index({ [field]: -1 });
+};
 // house validator
 const validator = value => value !== 'house';
 
@@ -259,15 +265,18 @@ const propertySchema = new mongoose.Schema(
 );
 
 // indexes
-propertySchema.index({
-  title: 'text',
-  story: 'text',
-  tags: 'text',
-});
 
-propertySchema.index({
-  location: '2dsphere',
-});
+// propertySchema.index({
+//   location: '2dsphere',
+// });
+
+// Index all sortable fields
+
+createAscDescIndex(propertySchema, 'price');
+createAscDescIndex(propertySchema, 'title');
+createAscDescIndex(propertySchema, 'rooms');
+// createAscDescIndex(propertySchema, 'address');
+createAscDescIndex(propertySchema, 'area');
 
 // virtuals
 propertySchema.virtual('owner', {
@@ -278,21 +287,9 @@ propertySchema.virtual('owner', {
 });
 
 propertySchema.virtual('images').get(function () {
-  const property = this;
-  const { imagesNames } = property;
-  const { CLOUDFRONT_URL } = process.env;
-
-  return imagesNames.map(({ sourceName, names }) => {
-    const smallestImage = names[0];
-    return {
-      sourceName: sourceName,
-      src: `${CLOUDFRONT_URL}/${smallestImage}`,
-      srcset: formatSrset(names.map(name => `${CLOUDFRONT_URL}/${name}`)),
-    };
-  });
+  // property
+  return preProcessImage(this);
 });
-
-// hooks
 
 // methods
 propertySchema.methods.toJSON = function () {

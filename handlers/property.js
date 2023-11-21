@@ -2,103 +2,89 @@ import { ServerError, catchAsyncErrors } from './errors';
 import Property from '../schemas/property';
 import { removeFroms3 } from '../s3';
 import {
-  Pipeline,
   buildFilterStage,
   buildPipeline,
   buildSearchStage,
   buildSortStage,
+  calculatePagination,
   insideGuinea,
-  isNearGuinea,
   objectAssign,
+  ownerLookupStage,
   paginateModel,
+  preProcessImage,
   uploadPropertyImages,
 } from '../utils';
 
 export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
-  console.log('Request Query: ', req.query);
-  // latitude of client
-  const latitude = parseFloat(req.headers.latitude);
-  // longitude of client
-  const longitude = parseFloat(req.headers.longitude);
-  // radius is in km convert it to meters 1km => 1000m
-  const radius = parseInt(req.headers.radius) * 1000 || 10_000;
+  const { north_east_bounds } = req.headers;
+  const { south_west_bounds } = req.headers;
 
-  console.log('Lng: ', longitude, 'Lat: ', latitude, 'Radius: ', radius);
+  // location of user fetching properties
+  const userLocation = {
+    // latitude of client
+    latitude: parseFloat(req.headers.latitude),
+    // longitude of client
+    longitude: parseFloat(req.headers.longitude),
 
-  // this filter finds properties near a given client location
-  const geoFilter = {
-    location: {
-      $nearSphere: {
-        $geometry: { type: 'Point', coordinates: [longitude, latitude] },
-        // $maxDistance: radius,
-      },
-    },
+    // bounds comes coupled as a comma separated string (lng,lat)
+    // split it and parse it to be a float number
+    northEastBounds: north_east_bounds
+      ? north_east_bounds.split(',').map(parseFloat)
+      : north_east_bounds,
+    southWestBounds: south_west_bounds
+      ? south_west_bounds.split(',').map(parseFloat)
+      : south_west_bounds,
   };
 
-  const { search, type, documented, page = 1, limit = 100 } = req.query;
-  // object containg search query
-  const searchObject = {};
-  // search query
-  const searchQuery = { $text: { $search: search } };
-  // only assign search query to search object when present
-  search && objectAssign(searchQuery, searchObject);
-  // contains all filters
-  const filterObject = {};
-  // only try finding properties near location if longitude and latitude is present
-  longitude && latitude && objectAssign(geoFilter, filterObject);
+  console.log('User Location: ', userLocation);
 
-  // assign if present
-  objectAssign({ type, documented }, filterObject);
-
-  // contains sorting
-  let { sortBy } = req.query;
-
-  // contains pagination info
-  const pagination = { page, limit };
-  // paginate data
-
-  const data = await paginateModel(
-    Property,
-    searchObject,
-    filterObject,
-    sortBy,
-    pagination,
-    'owner'
-  );
-
-  res.json(data);
-});
-
-export const fetchProperties2 = catchAsyncErrors(async (req, res, next) => {
-  // latitude of client
-  const latitude = parseFloat(req.headers.latitude);
-  // longitude of client
-  const longitude = parseFloat(req.headers.longitude);
-  // radius is in km convert it to meters 1km => 1000m
-  const radius = parseInt(req.headers.radius) * 1000 || 500_000;
-
-  console.log('Lng: ', longitude, 'Lat: ', latitude, 'Radius: ', radius);
-
+  // request queries
   const { search, sortBy, limit, page } = req.query;
 
   // search stage
-  const searchStage = buildSearchStage(search, { longitude, latitude, radius });
+  const searchStage = buildSearchStage(search, userLocation);
 
   // filter stage
   const filterStage = buildFilterStage(req.query);
 
+  // get properties count
+  const countPipeline = buildPipeline(searchStage, filterStage);
+
+  const countResults = await Property.aggregate(countPipeline).count('total');
+
+  const propertyCount = countResults.length ? countResults[0].total : 0;
+
+  console.log('Property count: ', propertyCount);
+
+  // get pagination info
+  const pagination = calculatePagination(propertyCount, page, limit);
+
+  console.log(pagination);
+
   // sort stage
-  const sortStage = buildSortStage(sortBy);
+  const sortObject = buildSortStage(sortBy);
 
-  // contains pagination info
-  const pagination = {};
-  // paginate data
+  const pipeline = buildPipeline(searchStage, filterStage, sortObject);
 
-  const pipeline = buildPipeline(searchStage, filterStage, sortStage);
+  const properties = await Property.aggregate(pipeline)
 
-  const properties = await Property.aggregate(pipeline);
+    .skip(pagination.skip)
+    .limit(pagination.limit)
+    // use append because owner is an array to be transformed into an object
+    .append(ownerLookupStage);
 
-  res.json(properties);
+  // preprocess images for this property to serve client the right content
+  properties.forEach(property => {
+    property.images = preProcessImage(property);
+    // remove property names from the property object
+    delete property.imagesNames;
+  });
+
+  console.log('Filters: ', filterStage);
+  // console.log('Filter Stage: ', filterStage);
+  console.log('Sort Object: ', sortObject);
+
+  res.json({ ...pagination, properties });
 });
 
 export const createProperty = catchAsyncErrors(async (req, res, next) => {
@@ -111,10 +97,14 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
     );
 
   // check to see if coordinates are in Guinea
-  const fullyInGuinea = await insideGuinea(location.coordinates);
+  const fullyInGuinea = true; // await insideGuinea(location.coordinates);
+
+  console.log('In Guinea ?: ', fullyInGuinea);
 
   if (!fullyInGuinea)
-    return new ServerError('Cannot create a property outside of Guinea', 400);
+    return next(
+      new ServerError('Cannot create a property outside of Guinea', 400)
+    );
 
   // create new property
   const property = new Property(req.body);
@@ -264,7 +254,12 @@ export const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  await uploadPropertyImages(uploadedImages, property);
+  /* 
+    run this in the background
+    don't wait for this to finish before responding to client for better UI exp
+  */
+
+  uploadPropertyImages(uploadedImages, property);
 
   res.json(property);
 });
@@ -307,13 +302,16 @@ export const removePropertyImages = catchAsyncErrors(async (req, res, next) => {
       imageObject => imageObject.sourceName === imageName
     );
 
-    // remove image and all it's duplicates from s3
-    await removeFroms3(image.names);
+    if (image) {
+      // remove image and all it's duplicates from s3
+      // run this in the background to save time of response
+      removeFroms3(image.names);
 
-    // remove image info from db
-    property.imagesNames = property.imagesNames.filter(
-      imageObject => imageObject.sourceName !== imageName
-    );
+      // remove image info from db
+      property.imagesNames = property.imagesNames.filter(
+        imageObject => imageObject.sourceName !== imageName
+      );
+    }
   }
 
   await property.save();

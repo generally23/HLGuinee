@@ -112,7 +112,7 @@ export const convertToWebp = async (file, quality = 100) => {
   return file;
 };
 
-export const uploadAvatar = async (file, account, next) => {
+export const uploadAvatar = async (file, account) => {
   if (file && account) {
     // change avatar name
     file.originalname = `avatar-${account.id}`;
@@ -181,109 +181,6 @@ export const uploadPropertyImages = async (images, property) => {
     // persist to db
     await property.save();
   }
-  return true;
-};
-
-// create pages array out of a number of pages
-const createPages = numPages => {
-  let firstPage = 1;
-  const pages = [];
-  for (let i = firstPage; i <= numPages; i++) {
-    pages.push(i);
-  }
-  return pages;
-};
-
-export const paginateModel = async (
-  Model,
-  searchObject = {},
-  filterObject = {},
-  sortStr = '',
-  /* paging info */ { page, limit },
-  // all these must be populated
-  ...populates
-) => {
-  // variables
-  let docs;
-  let docsCount;
-  let query;
-  let matches;
-  let matchesIds;
-  // find documents length
-  const searchObjectLength = Object.values(searchObject).length;
-
-  if (searchObjectLength) {
-    matches = await Model.find(searchObject);
-    matchesIds = matches.map(match => match._id);
-
-    const documents = await Model.find({
-      _id: { $in: matchesIds },
-      ...filterObject,
-    });
-
-    docsCount = documents.length;
-  } else {
-    // we didn't use countDocuments here because it doesn't support $nearSphere
-    const documents = await Model.find(filterObject);
-    docsCount = documents.length;
-  }
-
-  // get paging info
-  page = Number(page);
-  limit = Number(limit);
-
-  // sanitize user input
-  if (isNaN(page) || page < 1) page = 1;
-
-  if (isNaN(limit) || limit < 15) limit = 15;
-
-  let firstPage = 1;
-  let pages = Math.ceil(docsCount / limit);
-  let lastPage = pages;
-
-  const prevPage = firstPage < page ? page - 1 : null;
-  const nextPage = lastPage > page ? page + 1 : null;
-
-  const read = page - firstPage;
-  const toread = lastPage - page;
-
-  const skip = (page - 1) * limit;
-
-  if (searchObjectLength) {
-    query = Model.find({ _id: { $in: matchesIds }, ...filterObject })
-      .sort(sortStr)
-      .skip(skip)
-      .limit(limit);
-
-    populates.forEach(population => query.populate(population));
-
-    docs = await query;
-  } else {
-    query = Model.find(filterObject).sort(sortStr).skip(skip).limit(limit);
-
-    populates.forEach(population => query.populate(population));
-
-    docs = await query;
-  }
-
-  const docsLength = docs.length;
-
-  console.log('Total Results: ', docsCount);
-
-  return {
-    page,
-    pageCount: pages,
-    pages: createPages(pages),
-    nextPage,
-    prevPage,
-    read,
-    toread,
-    docs,
-    totalResults: docsCount,
-    firstPage,
-    lastPage,
-    docsLength,
-  };
 };
 
 export const sendEmail = async content => {
@@ -357,7 +254,9 @@ export const formatSrset = srcSet => {
   return formatted;
 };
 
-export const insideGuinea = async ({ longitude, latitude }) => {
+export const insideGuinea = async coordinates => {
+  if (!coordinates || coordinates.length !== 2) return false;
+
   try {
     // read file
     const file = await fs.readFile(
@@ -368,11 +267,11 @@ export const insideGuinea = async ({ longitude, latitude }) => {
     const parsedFile = JSON.parse(file);
 
     // get coordinates from file
-    const coordinates = parsedFile.features[0].geometry.coordinates;
+    const guineaCoordinates = parsedFile.features[0].geometry.coordinates;
 
-    const place = point([longitude, latitude]);
+    const place = point(coordinates);
 
-    const area = polygon(coordinates);
+    const area = polygon(guineaCoordinates);
 
     return booleanPointInPolygon(place, area);
   } catch (e) {
@@ -380,77 +279,73 @@ export const insideGuinea = async ({ longitude, latitude }) => {
   }
 };
 
-export const isNearGuinea = coordinates => {
-  if (!coordinates || coordinates.length !== 2) return false;
-
-  const place = point(coordinates);
-
-  const area = polygon([
-    [
-      [-15.1303112452, 7.3090373804],
-      [-7.83210038902, 7.3090373804],
-      [-7.83210038902, 12.5861829696],
-      [-15.1303112452, 12.5861829696],
-      [-15.1303112452, 7.3090373804],
-    ],
-  ]);
-
-  return booleanPointInPolygon(place, area);
+const isGeoSearchAllowed = (
+  longitude,
+  latitude,
+  northEastBounds,
+  southWestBounds
+) => {
+  return (
+    longitude &&
+    latitude &&
+    northEastBounds &&
+    northEastBounds.length === 2 &&
+    southWestBounds &&
+    southWestBounds.length === 2
+  );
 };
 
 export const buildSearchStage = (
   searchTerm,
-  { longitude, latitude, radius }
+  { longitude, latitude, northEastBounds, southWestBounds }
 ) => {
-  const coordinates = [longitude, latitude];
-  // check to see if the user is inside guinea's bounding box
-  const isGeoSearchAllowed =
-    longitude && latitude ? isNearGuinea(coordinates) : false;
+  console.log('northEastBounds', northEastBounds);
+  console.log('southWestBounds', southWestBounds);
 
-  const textStage = {
-    $search: {
-      index: '',
-      text: {
-        query: searchTerm,
-        path: ['title', 'tags'],
-      },
-    },
+  // mongodb atlas search index name
+  const index = 'main_search';
+  // check to see if the user is inside guinea's bounding box
+  const geoSearchAllowed = isGeoSearchAllowed(
+    longitude,
+    latitude,
+    northEastBounds,
+    southWestBounds
+  );
+
+  // search stage
+  const searchStage = { $search: { index } };
+
+  // text search query
+  const textQuery = {
+    query: searchTerm,
+    path: ['title', 'tags', 'description', 'address'],
+    fuzzy: {},
   };
 
-  const geoStage = {
-    $search: {
-      index: '',
-      geoWithin: {
-        circle: {
-          center: {
-            type: 'Point',
-            coordinates: coordinates,
-          },
-          radius,
-        },
-        path: 'location',
+  // geo search query
+  const geoQuery = {
+    path: 'location',
+    box: {
+      bottomLeft: {
+        type: 'Point',
+        coordinates: southWestBounds,
+      },
+      topRight: {
+        type: 'Point',
+        coordinates: northEastBounds,
       },
     },
   };
 
   // user has not serched for anything and they're not allowed to geo search
-  if (!searchTerm && !isGeoSearchAllowed) return;
+  if (!searchTerm && !geoSearchAllowed) return;
+  // user is only text searching if there's a search term
+  // if (searchTerm) searchStage.$search.text = textQuery;
+  // user is only geo searching when search term is missing & geo search is allowed
+  else if (geoSearchAllowed) searchStage.$search.geoWithin = geoQuery;
 
-  if (searchTerm && isGeoSearchAllowed) {
-    // use th readius to determine which order to carry out query
-    return {
-      $search: {
-        index: '',
-        compound: {
-          must: [textStage, geoStage],
-        },
-      },
-    };
-  }
-
-  if (searchTerm && !isGeoSearchAllowed) return textStage;
-
-  if (!searchTerm && isGeoSearchAllowed) return geoStage;
+  // return built search stage based on above scenarios
+  return searchStage;
 };
 
 export const buildFilterStage = query => {
@@ -506,26 +401,110 @@ export const buildSortStage = string => {
   // set sortObject property to ascending
   else sortObject[string] = 1;
   // return stage
+
   return {
     $sort: sortObject,
   };
 };
 
-export const buildLimitStage = limit => {
-  const maxLimit = 100;
+export const buildLimitStage = limit => ({ $limit: limit });
 
-  const numberLimit = parseInt(limit);
-
-  limit = numberLimit <= maxLimit ? numberLimit : maxLimit;
-
-  return { $limit: limit };
+export const buildCountStage = fieldName => {
+  // if user doesn't pass a field name return
+  if (!fieldName || !fieldName.length) return;
+  return { $count: fieldName };
 };
 
-export const skipStage = page => {};
+export const buildSkipStage = offset => ({
+  $skip: offset,
+});
 
-// export const buildLimitStage = limit => {
+export const imageLookupStage = {
+  from: 'propertyImages',
+  localField: '_id',
+  foreignField: 'propertyId',
+  as: 'images',
+};
 
-// }
+export const ownerLookupStage = [
+  {
+    $lookup: {
+      from: 'accounts',
+      localField: 'ownerId',
+      foreignField: '_id',
+      as: 'owner',
+    },
+  },
+  {
+    $set: {
+      owner: { $arrayElemAt: ['$owner', 0] },
+    },
+  },
+];
+
+export const between = (num, min, max) => {
+  if (num < min) num = min;
+  if (num > max) num = max;
+  return num;
+};
+
+export const calculatePagination = (total, page = 1, limit) => {
+  // minimum limit permitted
+  const minLimit = 1;
+  // maximum limit permitted
+  const maxLimit = 200;
+  // parsed limit defaults to 50 if not provided
+  const limitInt = parseInt(limit) || 100;
+  // get limit number between min & max
+  limit = between(limitInt, minLimit, maxLimit);
+
+  const pageInt = parseInt(page) || 1;
+  // minimum page permitted
+  const firstPage = total > 0 ? 1 : 0;
+  // calculated number of pages
+  const pages = Math.ceil(total / limit);
+  // maximum page permitted
+  const lastPage = pages;
+  // get page number between min & max
+  page = between(pageInt, firstPage, lastPage);
+
+  // calculate prev
+  const prevPage = firstPage < page ? page - 1 : null;
+  // calculate next
+  const nextPage = lastPage > page ? page + 1 : null;
+
+  // calculate skip
+  let skip = (page - 1) * limit;
+
+  // make sure skip is not negative
+  skip = skip >= 0 ? skip : 0;
+
+  // return pagination info
+  return {
+    limit,
+    page,
+    total,
+    prevPage,
+    nextPage,
+    skip,
+  };
+};
 
 // this takes stages and exclude empty stage
 export const buildPipeline = (...stages) => stages.filter(stage => stage);
+
+export const preProcessImage = property => {
+  if (!property) return;
+
+  const { CLOUDFRONT_URL } = process.env;
+  const { imagesNames } = property;
+
+  return imagesNames.map(({ sourceName, names }) => {
+    const smallestImage = names[0];
+    return {
+      sourceName: sourceName,
+      src: `${CLOUDFRONT_URL}/${smallestImage}`,
+      srcset: formatSrset(names.map(name => `${CLOUDFRONT_URL}/${name}`)),
+    };
+  });
+};
