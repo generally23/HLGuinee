@@ -19,13 +19,13 @@ require('fs/promises');
 require('@turf/turf');
 var argon = require('argon2');
 var emailValidator = require('email-validator');
-require('axios');
+var axios = require('axios');
 var dotenv = require('dotenv');
 var expressQueryParser = require('express-query-parser');
 
-const router$3 = express.Router();
+const router$4 = express.Router();
 
-router$3.get('/', (req, res) => res.send('Welcome to my webserver'));
+router$4.get('/', (req, res) => res.send('Welcome to my webserver'));
 
 const createS3Instance = () => {
   // AWS CONFIGURATION
@@ -575,6 +575,7 @@ const calculatePagination = (total, page = 1, limit) => {
   return {
     limit,
     page,
+    pages,
     total,
     prevPage,
     nextPage,
@@ -635,6 +636,7 @@ const createAscDescIndex = (schema, field) => {
   schema.index({ [field]: 1 });
   schema.index({ [field]: -1 });
 };
+
 // house validator
 const validator = value => value !== 'house';
 
@@ -647,6 +649,26 @@ const propertySchema = new mongoose.Schema(
       enum: ['house', 'land'],
       lowercase: true,
     },
+    purpose: {
+      type: String,
+      enum: ['rent', 'sell'],
+      required: [true, 'A house must have a purpose'],
+      validate: {
+        validator(value) {
+          // property can't be land and be rented for now
+          if (this.type === 'land' && value === 'rent') return false;
+          return true;
+        },
+      },
+    },
+    // only allowed for houses
+    rentPeriod: {
+      type: String,
+      default: function () {
+        return this.type === 'house' ? 'monthly' : undefined;
+      },
+      enum: ['monthly'],
+    },
     ownerId: {
       required: [true, 'A property must have an owner'],
       type: mongoose.Schema.Types.ObjectId,
@@ -654,17 +676,28 @@ const propertySchema = new mongoose.Schema(
     price: {
       type: Number,
       required: [true, 'A property needs a price'],
-      min: [5_000_000, 'A property price cannot be less than this amount'],
-      // price must not be past billions
-      max: [900_000_000_000, 'A property price cannot exceed this amount'],
+      // price must not be less than 5M for selling and less than 100K for rent
+      min: [
+        function () {
+          this.purpose === 'rent' ? 100_000 : 5_000_000;
+        },
+        'A property price cannot be less than this amount',
+      ],
+      // price must not be past billions for selling and past 10M for rent
+      max: [
+        function () {
+          this.purpose === 'rent' ? 10_000_000 : 900_000_000_000;
+        },
+        'A property price cannot exceed this amount',
+      ],
     },
     location: {
       type: locationSchema,
       required: [true, 'A property must have gps coordinates'],
     },
-    // documented: {
-    //   type: Boolean,
-    // },
+    documented: {
+      type: Boolean,
+    },
     address: {
       type: String,
       required: [true, 'A property must have an address'],
@@ -737,7 +770,6 @@ const propertySchema = new mongoose.Schema(
     // bathrooms:
     externalBathrooms: {
       type: Number,
-      default: 0,
       required: [
         function () {
           return this.type === 'house';
@@ -752,7 +784,6 @@ const propertySchema = new mongoose.Schema(
 
     internalBathrooms: {
       type: Number,
-      default: 0,
       required: [
         function () {
           return this.type === 'house';
@@ -766,7 +797,9 @@ const propertySchema = new mongoose.Schema(
     },
     hasCuisine: {
       type: Boolean,
-      default: false,
+      default: function () {
+        return this.type === 'house' ? false : undefined;
+      },
       required: [
         function () {
           return this.type === 'house';
@@ -780,7 +813,9 @@ const propertySchema = new mongoose.Schema(
     },
     hasGarage: {
       type: Boolean,
-      default: false,
+      default: function () {
+        return this.type === 'house' ? false : undefined;
+      },
       required: [
         function () {
           return this.type === 'house';
@@ -795,7 +830,9 @@ const propertySchema = new mongoose.Schema(
     // sale a manger
     hasDiningRoom: {
       type: Boolean,
-      default: false,
+      default: function () {
+        return this.type === 'house' ? false : undefined;
+      },
       required: [
         function () {
           return this.type === 'house';
@@ -810,7 +847,9 @@ const propertySchema = new mongoose.Schema(
     // salon
     hasLivingRoom: {
       type: Boolean,
-      default: false,
+      default: function () {
+        return this.type === 'house' ? false : undefined;
+      },
       required: [
         function () {
           return this.type === 'house';
@@ -841,13 +880,17 @@ const propertySchema = new mongoose.Schema(
     // cloturé
     fenced: {
       type: Boolean,
-      default: false,
+      default: function () {
+        return this.type === 'house' ? false : undefined;
+      },
       required: [true, 'Fenced is required'],
     },
 
     hasPool: {
       type: Boolean,
-      default: false,
+      default: function () {
+        return this.type === 'house' ? false : undefined;
+      },
       required: [
         function () {
           return this.type === 'house';
@@ -1383,6 +1426,7 @@ accountSchema.methods.toJSON = function () {
     'reset_token',
     'reset_token_expiration_date',
     'tokens',
+    'ip',
     'verificationCode',
     'verificationCodeExpirationDate',
     'resetToken',
@@ -1464,26 +1508,26 @@ const preventUnverifiedAccounts = catchAsyncErrors(
   }
 );
 
-const router$2 = express.Router();
+const router$3 = express.Router();
 
 const properties = '/properties';
 const propertyRoute = `${properties}/:propertyId`;
 
-router$2
+router$3
   .route(properties)
   .get(fetchProperties)
   .post(authenticate(), preventUnverifiedAccounts, createProperty);
 
-router$2.get(`${properties}/my-properties`, authenticate(), fetchMyProperties);
+router$3.get(`${properties}/my-properties`, authenticate(), fetchMyProperties);
 
-router$2
+router$3
   .route(propertyRoute)
   .get(fetchProperty)
   .patch(authenticate(), updateProperty)
   .delete(authenticate(), removeProperty);
 
 // add images to property
-router$2.post(
+router$3.post(
   `${propertyRoute}/images`,
   authenticate(),
   uploader({ files: 40 }).any(),
@@ -1491,14 +1535,14 @@ router$2.post(
 );
 
 // remove a property image
-router$2.post(
+router$3.post(
   `${propertyRoute}/images/delete`,
   authenticate(),
   removePropertyImages
 );
 
 // SYSTEM SPECIFIC ROUTES
-router$2
+router$3
   .route('system/properties/:propertyId')
   .patch(authenticate('system'), updateProperty)
   .delete(authenticate('system'), removeProperty);
@@ -1969,7 +2013,7 @@ const systemAdminPasswordChange = catchAsyncErrors(
   }
 );
 
-const router$1 = express.Router();
+const router$2 = express.Router();
 
 const parentRoute = '/accounts';
 
@@ -1978,91 +2022,125 @@ const systemParentRoute = `/system${parentRoute}`;
 /** AUTHENTICATED */
 
 // logout
-router$1.post(`${parentRoute}/signout`, authenticate(), signout);
+router$2.post(`${parentRoute}/signout`, authenticate(), signout);
 
 // fetch my account
-router$1.get(`${parentRoute}/my-account`, authenticate(), getMyAccount);
+router$2.get(`${parentRoute}/my-account`, authenticate(), getMyAccount);
 
 /** NOT AUTHENTICATED */
 
-router$1.post(`${parentRoute}/signup`, uploader().single('avatar'), signup);
+router$2.post(`${parentRoute}/signup`, uploader().single('avatar'), signup);
 
-router$1.post(`${parentRoute}/signin`, signin);
+router$2.post(`${parentRoute}/signin`, signin);
 
-router$1.post(`${parentRoute}/forgot-my-password`, forgotMyPassword);
+router$2.post(`${parentRoute}/forgot-my-password`, forgotMyPassword);
 
-router$1.patch(`${parentRoute}/reset-my-password/:resetToken`, resetMyPassword);
+router$2.patch(`${parentRoute}/reset-my-password/:resetToken`, resetMyPassword);
 
 /** AUTHENTICATED */
 
-router$1.patch(
+router$2.patch(
   `${parentRoute}/change-my-password`,
   authenticate(),
   changeMyPassword
 );
 
-router$1.patch(
+router$2.patch(
   `${parentRoute}/update-my-account`,
   authenticate(),
   updateMyAccount
 );
 
 // verify account
-router$1.get(`${parentRoute}/verify/:code`, authenticate(), verifyAccount);
+router$2.get(`${parentRoute}/verify/:code`, authenticate(), verifyAccount);
 
 // send verification code
-router$1.get(
+router$2.get(
   `${parentRoute}/verification-code`,
   authenticate(),
   sendVerficationCode
 );
 
 // SYSTEM ROUTES
-router$1.post(`${systemParentRoute}/signin`, systemSignIn);
-router$1.post(`${systemParentRoute}/signout`, authenticate('system'), signout);
-router$1.patch(
+router$2.post(`${systemParentRoute}/signin`, systemSignIn);
+router$2.post(`${systemParentRoute}/signout`, authenticate('system'), signout);
+router$2.patch(
   `${systemParentRoute}/change-my-password`,
   authenticate('system'),
   changeMyPassword
 );
 
 // ADMIN ROUTES
-router$1.get(
+router$2.get(
   `${systemParentRoute}/my-account`,
   authenticate('system'),
   getMyAccount
 );
 
-router$1.post(
+router$2.post(
   `${systemParentRoute}/create-account`,
   authenticate('system'),
   allowAccessTo('admin', 'sub-admin'),
   systemAdminCreateAccount
 );
-router$1.patch(
+router$2.patch(
   `${systemParentRoute}/update-account/:accountId`,
   authenticate('system'),
   allowAccessTo('admin', 'sub-admin'),
   systemAdminAccountUpdate
 );
-router$1.delete(
+router$2.delete(
   `${systemParentRoute}/delete-account/:accountId`,
   authenticate('system'),
   allowAccessTo('admin', 'sub-admin'),
   systemAdminRemoveAccount
 );
-router$1.patch(
+router$2.patch(
   `${systemParentRoute}/change-password/:accountId`,
   authenticate('system'),
   allowAccessTo('admin', 'sub-admin'),
   systemAdminPasswordChange
 );
 
+const autocompletePlaces = catchAsyncErrors(async (req, res, next) => {
+  // google access key
+  const { GOOGLE_ACCESS_KEY } = process.env;
+  // user typed input
+  const { address } = req.query;
+
+  if (!address)
+    return next(
+      new ServerError('An address is required to perform places autocomplete')
+    );
+  // request options
+  const options = `language=fr&components=country:gn`;
+  // url to google places API
+  const placesUrl =
+    'https://maps.googleapis.com/maps/api/place/autocomplete/json';
+
+  const response = await axios({
+    url: `${placesUrl}?input=${address}&${options}&key=${GOOGLE_ACCESS_KEY}`,
+  });
+
+  console.log(response);
+
+  res.json(response.data);
+});
+
+const router$1 = express.Router();
+
+router$1.get('/places', autocompletePlaces);
+
 const router = express.Router();
 
-// server main routes
-router.use('/', router$1);
+// API main routes
+
+// Accounts Router
 router.use('/', router$2);
+// Properties Router
+router.use('/', router$3);
+// Geocoding Router
+router.use('/', router$1);
 
 // start db connection
 const connectToDb = async () => {
@@ -2152,7 +2230,7 @@ const setupExpressMiddleware = server => {
   // server.get('api./subdomain', (req, res) => res.send('Test working...'));
 
   // WEB SERVER ROUTES
-  server.use('/', router$3);
+  server.use('/', router$4);
 
   // API ROUTES
   server.use('/api/v1', router);

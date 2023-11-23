@@ -1,32 +1,7 @@
 import mongoose from 'mongoose';
-import { deleteProps, formatSrset, preProcessImage } from '../utils';
-
-const imageSchema = new mongoose.Schema({
-  sourceName: {
-    type: String,
-    required: [true],
-  },
-  names: [String],
-});
-
-const locationSchema = new mongoose.Schema({
-  type: {
-    type: String,
-    required: [true],
-    enum: ['Point'],
-    default: 'Point',
-  },
-  coordinates: {
-    type: [Number],
-    required: [true],
-    validator: {
-      validate(value) {
-        return value.length === 2;
-      },
-      message: 'Coordinates need a Longitude and a Latitude',
-    },
-  },
-});
+import { deleteProps, preProcessImage } from '../../utils';
+import { locationSchema } from './location';
+import { imageSchema } from './image';
 
 // helper functions
 
@@ -35,6 +10,7 @@ const createAscDescIndex = (schema, field) => {
   schema.index({ [field]: 1 });
   schema.index({ [field]: -1 });
 };
+
 // house validator
 const validator = value => value !== 'house';
 
@@ -47,6 +23,26 @@ const propertySchema = new mongoose.Schema(
       enum: ['house', 'land'],
       lowercase: true,
     },
+    purpose: {
+      type: String,
+      enum: ['rent', 'sell'],
+      required: [true, 'A house must have a purpose'],
+      validate: {
+        validator(value) {
+          // property can't be land and be rented for now
+          if (this.type === 'land' && value === 'rent') return false;
+          return true;
+        },
+      },
+    },
+    // only allowed for houses
+    rentPeriod: {
+      type: String,
+      default: function () {
+        return this.type === 'house' ? 'monthly' : undefined;
+      },
+      enum: ['monthly'],
+    },
     ownerId: {
       required: [true, 'A property must have an owner'],
       type: mongoose.Schema.Types.ObjectId,
@@ -54,17 +50,28 @@ const propertySchema = new mongoose.Schema(
     price: {
       type: Number,
       required: [true, 'A property needs a price'],
-      min: [5_000_000, 'A property price cannot be less than this amount'],
-      // price must not be past billions
-      max: [900_000_000_000, 'A property price cannot exceed this amount'],
+      // price must not be less than 5M for selling and less than 100K for rent
+      min: [
+        function () {
+          this.purpose === 'rent' ? 100_000 : 5_000_000;
+        },
+        'A property price cannot be less than this amount',
+      ],
+      // price must not be past billions for selling and past 10M for rent
+      max: [
+        function () {
+          this.purpose === 'rent' ? 10_000_000 : 900_000_000_000;
+        },
+        'A property price cannot exceed this amount',
+      ],
     },
     location: {
       type: locationSchema,
       required: [true, 'A property must have gps coordinates'],
     },
-    // documented: {
-    //   type: Boolean,
-    // },
+    documented: {
+      type: Boolean,
+    },
     address: {
       type: String,
       required: [true, 'A property must have an address'],
@@ -133,11 +140,9 @@ const propertySchema = new mongoose.Schema(
         message: 'Rooms are only for a house',
       },
     },
-
     // bathrooms:
     externalBathrooms: {
       type: Number,
-      default: 0,
       required: [
         function () {
           return this.type === 'house';
@@ -152,7 +157,6 @@ const propertySchema = new mongoose.Schema(
 
     internalBathrooms: {
       type: Number,
-      default: 0,
       required: [
         function () {
           return this.type === 'house';
@@ -166,7 +170,9 @@ const propertySchema = new mongoose.Schema(
     },
     hasCuisine: {
       type: Boolean,
-      default: false,
+      default: function () {
+        return this.type === 'house' ? false : undefined;
+      },
       required: [
         function () {
           return this.type === 'house';
@@ -180,7 +186,9 @@ const propertySchema = new mongoose.Schema(
     },
     hasGarage: {
       type: Boolean,
-      default: false,
+      default: function () {
+        return this.type === 'house' ? false : undefined;
+      },
       required: [
         function () {
           return this.type === 'house';
@@ -195,7 +203,9 @@ const propertySchema = new mongoose.Schema(
     // sale a manger
     hasDiningRoom: {
       type: Boolean,
-      default: false,
+      default: function () {
+        return this.type === 'house' ? false : undefined;
+      },
       required: [
         function () {
           return this.type === 'house';
@@ -210,7 +220,9 @@ const propertySchema = new mongoose.Schema(
     // salon
     hasLivingRoom: {
       type: Boolean,
-      default: false,
+      default: function () {
+        return this.type === 'house' ? false : undefined;
+      },
       required: [
         function () {
           return this.type === 'house';
@@ -241,13 +253,17 @@ const propertySchema = new mongoose.Schema(
     // cloturé
     fenced: {
       type: Boolean,
-      default: false,
+      default: function () {
+        return this.type === 'house' ? false : undefined;
+      },
       required: [true, 'Fenced is required'],
     },
 
     hasPool: {
       type: Boolean,
-      default: false,
+      default: function () {
+        return this.type === 'house' ? false : undefined;
+      },
       required: [
         function () {
           return this.type === 'house';

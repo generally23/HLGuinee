@@ -1,9 +1,9 @@
 import mongoose from 'mongoose';
 import argon from 'argon2';
-import { deleteProps, hashToken } from '../utils';
+import { deleteProps, hashToken } from '../../utils';
 import crypto from 'crypto';
 import emailValidator from 'email-validator';
-import { ServerError } from '../handlers/errors';
+import { ServerError } from '../../handlers/errors';
 
 // SCHEMA
 const accountSchema = new mongoose.Schema(
@@ -182,6 +182,7 @@ accountSchema.methods.toJSON = function () {
     'reset_token',
     'reset_token_expiration_date',
     'tokens',
+    'ip',
     'verificationCode',
     'verificationCodeExpirationDate',
     'resetToken',

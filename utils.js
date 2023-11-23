@@ -483,6 +483,7 @@ export const calculatePagination = (total, page = 1, limit) => {
   return {
     limit,
     page,
+    pages,
     total,
     prevPage,
     nextPage,
