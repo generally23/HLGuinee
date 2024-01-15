@@ -232,3 +232,51 @@
 //     // return built search stage based on above scenarios
 //     return searchStage;
 //   };
+
+// export const buildSearchStage = (
+//   searchTerm,
+//   { northEastBounds, southWestBounds }
+// ) => {
+//   console.log('northEastBounds', northEastBounds);
+//   console.log('southWestBounds', southWestBounds);
+
+//   // mongodb atlas search index name
+//   const index = 'main_search';
+//   // check to see if the user is inside guinea's bounding box
+//   const geoSearchAllowed = isGeoSearchAllowed(northEastBounds, southWestBounds);
+
+//   // search stage
+//   const searchStage = { $search: { index } };
+
+//   // text search query
+//   // const textQuery = {
+//   //   query: searchTerm,
+//   //   path: ['title', 'tags', 'description', 'address'],
+//   //   fuzzy: {},
+//   // };
+
+//   // geo search query
+//   const geoQuery = {
+//     path: 'location',
+//     box: {
+//       bottomLeft: {
+//         type: 'Point',
+//         coordinates: southWestBounds,
+//       },
+//       topRight: {
+//         type: 'Point',
+//         coordinates: northEastBounds,
+//       },
+//     },
+//   };
+
+//   // user has not serched for anything and they're not allowed to geo search
+//   if (!searchTerm && !geoSearchAllowed) return;
+//   // user is only text searching if there's a search term
+//   // if (searchTerm) searchStage.$search.text = textQuery;
+//   // user is only geo searching when search term is missing & geo search is allowed
+//   else if (geoSearchAllowed) searchStage.$search.geoWithin = geoQuery;
+
+//   // return built search stage based on above scenarios
+//   return searchStage;
+// };

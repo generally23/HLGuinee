@@ -1,5 +1,5 @@
 import { ServerError, catchAsyncErrors } from './errors';
-import Property from '../schemas/property';
+import Property from '../schemas/property/index';
 import { removeFroms3 } from '../s3';
 import {
   buildFilterStage,
@@ -10,7 +10,6 @@ import {
   insideGuinea,
   objectAssign,
   ownerLookupStage,
-  paginateModel,
   preProcessImage,
   uploadPropertyImages,
 } from '../utils';
@@ -21,11 +20,6 @@ export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
 
   // location of user fetching properties
   const userLocation = {
-    // latitude of client
-    latitude: parseFloat(req.headers.latitude),
-    // longitude of client
-    longitude: parseFloat(req.headers.longitude),
-
     // bounds comes coupled as a comma separated string (lng,lat)
     // split it and parse it to be a float number
     northEastBounds: north_east_bounds
@@ -109,7 +103,7 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
   // create new property
   const property = new Property(req.body);
 
-  // if promo period hasn't expired auto publish property for free
+  // if promo period hasn't expired auto list property for free
   // promo is 1 year so convert down to milliseconds
   const promoPeriod =
     parseInt(process.env.PROMO_PERIOD) * 12 * 30 * 24 * 60 * 60 * 1000;
@@ -169,7 +163,7 @@ export const updateProperty = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  objectAssign(req.body, property);
+  objectAssign(req.body, property, { mode: 'nostrict' });
 
   await property.save();
 

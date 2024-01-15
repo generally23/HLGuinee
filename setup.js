@@ -13,7 +13,7 @@ import API_ROUTER from './routers/Api';
 
 import dotenv from 'dotenv';
 import { unroutable, globalErrorHandler } from './handlers/errors';
-import Account from './schemas/account';
+import Account from './schemas/account/index';
 import { generateDfPassword } from './utils';
 
 import { queryParser } from 'express-query-parser';
@@ -119,7 +119,10 @@ export const setupExpressMiddleware = server => {
 };
 
 // Port listener
-export const listen = async (server, port = process.env.PORT || 9090) => {
+export const listen = async (
+  server,
+  port = parseInt(process.env.PORT) || 9090
+) => {
   try {
     await server.listen(port, console.log);
     console.log('listening on port 9090');

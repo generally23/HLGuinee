@@ -10,12 +10,16 @@ import fs from 'fs/promises';
 import path from 'path';
 import { booleanPointInPolygon, point, polygon } from '@turf/turf';
 
-export const objectAssign = (source, target) => {
-  if (!source || !target) {
-    return;
-  }
+export const objectAssign = (source, target, options = { mode: '' }) => {
+  if (!source || !target) return;
+
   for (let key in source) {
-    if (source[key]) target[key] = source[key];
+    //  non strict mode just assign values even falsy ones
+    if (options.mode === 'nostrict') target[key] = source[key];
+    // use strict mode
+    else {
+      if (source[key]) target[key] = source[key];
+    }
   }
 };
 
@@ -279,15 +283,8 @@ export const insideGuinea = async coordinates => {
   }
 };
 
-const isGeoSearchAllowed = (
-  longitude,
-  latitude,
-  northEastBounds,
-  southWestBounds
-) => {
+const isGeoSearchAllowed = (northEastBounds, southWestBounds) => {
   return (
-    longitude &&
-    latitude &&
     northEastBounds &&
     northEastBounds.length === 2 &&
     southWestBounds &&
@@ -297,7 +294,7 @@ const isGeoSearchAllowed = (
 
 export const buildSearchStage = (
   searchTerm,
-  { longitude, latitude, northEastBounds, southWestBounds }
+  { northEastBounds, southWestBounds }
 ) => {
   console.log('northEastBounds', northEastBounds);
   console.log('southWestBounds', southWestBounds);
@@ -305,22 +302,19 @@ export const buildSearchStage = (
   // mongodb atlas search index name
   const index = 'main_search';
   // check to see if the user is inside guinea's bounding box
-  const geoSearchAllowed = isGeoSearchAllowed(
-    longitude,
-    latitude,
-    northEastBounds,
-    southWestBounds
-  );
+  const geoSearchAllowed = isGeoSearchAllowed(northEastBounds, southWestBounds);
+
+  if (!geoSearchAllowed) return;
 
   // search stage
   const searchStage = { $search: { index } };
 
   // text search query
-  const textQuery = {
-    query: searchTerm,
-    path: ['title', 'tags', 'description', 'address'],
-    fuzzy: {},
-  };
+  // const textQuery = {
+  //   query: searchTerm,
+  //   path: ['title', 'tags', 'description', 'address'],
+  //   fuzzy: {},
+  // };
 
   // geo search query
   const geoQuery = {
@@ -337,12 +331,9 @@ export const buildSearchStage = (
     },
   };
 
-  // user has not serched for anything and they're not allowed to geo search
-  if (!searchTerm && !geoSearchAllowed) return;
-  // user is only text searching if there's a search term
-  // if (searchTerm) searchStage.$search.text = textQuery;
-  // user is only geo searching when search term is missing & geo search is allowed
-  else if (geoSearchAllowed) searchStage.$search.geoWithin = geoQuery;
+  searchStage.$search.geoWithin = geoQuery;
+
+  console.log('SearchStage', searchStage);
 
   // return built search stage based on above scenarios
   return searchStage;
@@ -353,21 +344,19 @@ export const buildFilterStage = query => {
 
   const filters = [
     'type',
-    'title',
+    'purpose',
     'price',
     'area',
     'areaBuilt',
     'yearBuilt',
     'fenced',
-    'hasBathroom',
-    'hasGarage',
-    'hasCuisine',
-    'hasLivingRoom',
-    'hasDiningRoom',
-    'hasPool',
+    'bathrooms',
+    'garages',
+    'kitchens',
+    'livingRooms',
+    'diningRooms',
+    'pools',
     'rooms',
-    'externalBathrooms',
-    'internalBathrooms',
   ];
 
   for (let filter of filters) filterObject[filter] = query[filter];
@@ -454,7 +443,9 @@ export const calculatePagination = (total, page = 1, limit) => {
   // maximum limit permitted
   const maxLimit = 200;
   // parsed limit defaults to 50 if not provided
-  const limitInt = parseInt(limit) || 100;
+  // const limitInt = parseInt(limit) || 100;
+  const limitInt = parseInt(limit) || 5;
+
   // get limit number between min & max
   limit = between(limitInt, minLimit, maxLimit);
 

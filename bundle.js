@@ -19,13 +19,12 @@ require('fs/promises');
 require('@turf/turf');
 var argon = require('argon2');
 var emailValidator = require('email-validator');
-var axios = require('axios');
 var dotenv = require('dotenv');
 var expressQueryParser = require('express-query-parser');
 
-const router$4 = express.Router();
+const router$3 = express.Router();
 
-router$4.get('/', (req, res) => res.send('Welcome to my webserver'));
+router$3.get('/', (req, res) => res.send('Welcome to my webserver'));
 
 const createS3Instance = () => {
   // AWS CONFIGURATION
@@ -162,12 +161,16 @@ const globalErrorHandler = (err, req, res, next) => {
   }
 };
 
-const objectAssign = (source, target) => {
-  if (!source || !target) {
-    return;
-  }
+const objectAssign = (source, target, options = { mode: '' }) => {
+  if (!source || !target) return;
+
   for (let key in source) {
-    if (source[key]) target[key] = source[key];
+    //  non strict mode just assign values even falsy ones
+    if (options.mode === 'nostrict') target[key] = source[key];
+    // use strict mode
+    else {
+      if (source[key]) target[key] = source[key];
+    }
   }
 };
 
@@ -397,15 +400,8 @@ const formatSrset = srcSet => {
   return formatted;
 };
 
-const isGeoSearchAllowed = (
-  longitude,
-  latitude,
-  northEastBounds,
-  southWestBounds
-) => {
+const isGeoSearchAllowed = (northEastBounds, southWestBounds) => {
   return (
-    longitude &&
-    latitude &&
     northEastBounds &&
     northEastBounds.length === 2 &&
     southWestBounds &&
@@ -415,7 +411,7 @@ const isGeoSearchAllowed = (
 
 const buildSearchStage = (
   searchTerm,
-  { longitude, latitude, northEastBounds, southWestBounds }
+  { northEastBounds, southWestBounds }
 ) => {
   console.log('northEastBounds', northEastBounds);
   console.log('southWestBounds', southWestBounds);
@@ -423,15 +419,19 @@ const buildSearchStage = (
   // mongodb atlas search index name
   const index = 'main_search';
   // check to see if the user is inside guinea's bounding box
-  const geoSearchAllowed = isGeoSearchAllowed(
-    longitude,
-    latitude,
-    northEastBounds,
-    southWestBounds
-  );
+  const geoSearchAllowed = isGeoSearchAllowed(northEastBounds, southWestBounds);
+
+  if (!geoSearchAllowed) return;
 
   // search stage
   const searchStage = { $search: { index } };
+
+  // text search query
+  // const textQuery = {
+  //   query: searchTerm,
+  //   path: ['title', 'tags', 'description', 'address'],
+  //   fuzzy: {},
+  // };
 
   // geo search query
   const geoQuery = {
@@ -448,12 +448,9 @@ const buildSearchStage = (
     },
   };
 
-  // user has not serched for anything and they're not allowed to geo search
-  if (!searchTerm && !geoSearchAllowed) return;
-  // user is only text searching if there's a search term
-  // if (searchTerm) searchStage.$search.text = textQuery;
-  // user is only geo searching when search term is missing & geo search is allowed
-  else if (geoSearchAllowed) searchStage.$search.geoWithin = geoQuery;
+  searchStage.$search.geoWithin = geoQuery;
+
+  console.log('SearchStage', searchStage);
 
   // return built search stage based on above scenarios
   return searchStage;
@@ -464,21 +461,19 @@ const buildFilterStage = query => {
 
   const filters = [
     'type',
-    'title',
+    'purpose',
     'price',
     'area',
     'areaBuilt',
     'yearBuilt',
     'fenced',
-    'hasBathroom',
-    'hasGarage',
-    'hasCuisine',
-    'hasLivingRoom',
-    'hasDiningRoom',
-    'hasPool',
+    'bathrooms',
+    'garages',
+    'kitchens',
+    'livingRooms',
+    'diningRooms',
+    'pools',
     'rooms',
-    'externalBathrooms',
-    'internalBathrooms',
   ];
 
   for (let filter of filters) filterObject[filter] = query[filter];
@@ -546,7 +541,9 @@ const calculatePagination = (total, page = 1, limit) => {
   // maximum limit permitted
   const maxLimit = 200;
   // parsed limit defaults to 50 if not provided
-  const limitInt = parseInt(limit) || 100;
+  // const limitInt = parseInt(limit) || 100;
+  const limitInt = parseInt(limit) || 5;
+
   // get limit number between min & max
   limit = between(limitInt, minLimit, maxLimit);
 
@@ -602,26 +599,22 @@ const preProcessImage = property => {
   });
 };
 
-const imageSchema = new mongoose.Schema({
-  sourceName: {
-    type: String,
-    required: [true],
-  },
-  names: [String],
-});
-
 const locationSchema = new mongoose.Schema({
   type: {
     type: String,
     required: [true],
-    enum: ['Point'],
+    enum: {
+      values: ['Point'],
+      message: 'Given location type is wrong',
+    },
     default: 'Point',
   },
   coordinates: {
     type: [Number],
-    required: [true],
+    required: [true, 'location coordinates are required'],
     validator: {
       validate(value) {
+        // values must be 2 Numbers
         return value.length === 2;
       },
       message: 'Coordinates need a Longitude and a Latitude',
@@ -629,7 +622,42 @@ const locationSchema = new mongoose.Schema({
   },
 });
 
-// helper functions
+const imageSchema = new mongoose.Schema({
+  sourceName: {
+    type: String,
+    required: [true, 'sourceName is required'],
+  },
+  names: [String],
+});
+
+const price = {
+  type: Number,
+  required: [true, 'A property needs a price'],
+  validate: [
+    {
+      validator: function () {
+        const { purpose, price } = this;
+
+        return (
+          (purpose === 'rent' && price >= 100000) ||
+          (purpose === 'sell' && price >= 10000000)
+        );
+      },
+      message: 'A property price cannot be less than this amount',
+    },
+    {
+      validator: function () {
+        const { purpose, price } = this;
+
+        return (
+          (purpose === 'rent' && price <= 10000000) ||
+          (purpose === 'sell' && price <= 900000000000)
+        );
+      },
+      message: 'A property price cannot exceed this amount',
+    },
+  ],
+};
 
 // create ascending & desc index in a field in one go
 const createAscDescIndex = (schema, field) => {
@@ -649,6 +677,7 @@ const propertySchema = new mongoose.Schema(
       enum: ['house', 'land'],
       lowercase: true,
     },
+
     purpose: {
       type: String,
       enum: ['rent', 'sell'],
@@ -661,6 +690,9 @@ const propertySchema = new mongoose.Schema(
         },
       },
     },
+
+    price,
+
     // only allowed for houses
     rentPeriod: {
       type: String,
@@ -669,35 +701,21 @@ const propertySchema = new mongoose.Schema(
       },
       enum: ['monthly'],
     },
+
     ownerId: {
       required: [true, 'A property must have an owner'],
       type: mongoose.Schema.Types.ObjectId,
     },
-    price: {
-      type: Number,
-      required: [true, 'A property needs a price'],
-      // price must not be less than 5M for selling and less than 100K for rent
-      min: [
-        function () {
-          this.purpose === 'rent' ? 100_000 : 5_000_000;
-        },
-        'A property price cannot be less than this amount',
-      ],
-      // price must not be past billions for selling and past 10M for rent
-      max: [
-        function () {
-          this.purpose === 'rent' ? 10_000_000 : 900_000_000_000;
-        },
-        'A property price cannot exceed this amount',
-      ],
-    },
+
     location: {
       type: locationSchema,
       required: [true, 'A property must have gps coordinates'],
     },
-    documented: {
-      type: Boolean,
-    },
+
+    // documented: {
+    //   type: Boolean,
+    // },
+
     address: {
       type: String,
       required: [true, 'A property must have an address'],
@@ -705,7 +723,7 @@ const propertySchema = new mongoose.Schema(
     },
 
     imagesNames: [imageSchema],
-    // area
+
     area: {
       type: Number,
       required: [true, 'Area is required'],
@@ -728,11 +746,11 @@ const propertySchema = new mongoose.Schema(
         message: 'area built is only for a house',
       },
     },
-    // area unit
+
     areaUnit: {
       type: String,
       required: [true, 'Area unit is required'],
-      default: 'square meter',
+      default: 'm²',
     },
 
     title: {
@@ -740,19 +758,18 @@ const propertySchema = new mongoose.Schema(
       max: [60, 'A title cannot exceed 60 characters'],
       required: [true, 'A property needs a title'],
     },
-    // description
+
     description: {
       type: String,
+      max: [1500, 'The description cannot be longer than 512 characters'],
     },
+
     status: {
       type: String,
-      enum: ['available', 'pending', 'sold'],
+      enum: ['unlisted', 'listed', 'pending', 'sold', 'rented'],
+      default: 'unlisted',
     },
-    published: {
-      type: Boolean,
-      required: [true, 'A property must have a published field'],
-      default: false,
-    },
+
     rooms: {
       type: Number,
       required: [
@@ -767,100 +784,88 @@ const propertySchema = new mongoose.Schema(
       },
     },
 
-    // bathrooms:
-    externalBathrooms: {
+    bathrooms: {
       type: Number,
       required: [
         function () {
           return this.type === 'house';
         },
-        'External bathrooms is required',
+        'bathrooms is required',
       ],
       validate: {
         validator,
-        message: 'External Bathrooms are only for a house',
+        message: 'Bathrooms are only for a house',
       },
     },
 
-    internalBathrooms: {
+    kitchens: {
       type: Number,
+      default: function () {
+        return this.type === 'house' ? 0 : undefined;
+      },
       required: [
         function () {
           return this.type === 'house';
         },
-        'Internal bathrooms is required',
+        'kitchens is required',
       ],
       validate: {
         validator,
-        message: 'Internal Bathrooms are only for a house',
+        message: 'kitchens is only for houses',
       },
     },
-    hasCuisine: {
-      type: Boolean,
+
+    garages: {
+      type: Number,
       default: function () {
-        return this.type === 'house' ? false : undefined;
+        return this.type === 'house' ? 0 : undefined;
       },
       required: [
         function () {
           return this.type === 'house';
         },
-        'Cuisine is required',
+        'garages is required',
       ],
       validate: {
         validator,
-        message: 'Cuisine is only for houses',
+        message: 'Garages are only for a house',
       },
     },
-    hasGarage: {
-      type: Boolean,
+
+    diningRooms: {
+      type: Number,
       default: function () {
-        return this.type === 'house' ? false : undefined;
+        return this.type === 'house' ? 0 : undefined;
       },
       required: [
         function () {
           return this.type === 'house';
         },
-        'Garage is required',
-      ],
-      validate: {
-        validator,
-        message: 'Garage is only for a house',
-      },
-    },
-    // sale a manger
-    hasDiningRoom: {
-      type: Boolean,
-      default: function () {
-        return this.type === 'house' ? false : undefined;
-      },
-      required: [
-        function () {
-          return this.type === 'house';
-        },
-        'Dining room is required',
+        'diningRooms is required',
       ],
       validate: {
         validator,
         message: 'Dining rooms are only for a house',
       },
     },
-    // salon
-    hasLivingRoom: {
-      type: Boolean,
+
+    livingRooms: {
+      type: Number,
       default: function () {
-        return this.type === 'house' ? false : undefined;
+        return this.type === 'house' ? 0 : undefined;
       },
       required: [
         function () {
           return this.type === 'house';
         },
-        'Living room is required',
+        'livingRooms is required',
       ],
       validate: {
         validator,
         message: 'Living rooms are only for a house',
       },
     },
+
     yearBuilt: {
       type: Number,
       // minium property built year
@@ -877,6 +882,7 @@ const propertySchema = new mongoose.Schema(
         'A house property must have a year built',
       ],
     },
+
     // cloturé
     fenced: {
       type: Boolean,
@@ -886,16 +892,16 @@ const propertySchema = new mongoose.Schema(
       required: [true, 'Fenced is required'],
     },
 
-    hasPool: {
-      type: Boolean,
+    pools: {
+      type: Number,
       default: function () {
-        return this.type === 'house' ? false : undefined;
+        return this.type === 'house' ? 0 : undefined;
       },
       required: [
         function () {
           return this.type === 'house';
         },
-        'Pool is required',
+        'pools is required',
       ],
       validate: {
         validator,
@@ -956,11 +962,6 @@ const fetchProperties = catchAsyncErrors(async (req, res, next) => {
 
   // location of user fetching properties
   const userLocation = {
-    // latitude of client
-    latitude: parseFloat(req.headers.latitude),
-    // longitude of client
-    longitude: parseFloat(req.headers.longitude),
-
     // bounds comes coupled as a comma separated string (lng,lat)
     // split it and parse it to be a float number
     northEastBounds: north_east_bounds
@@ -1039,7 +1040,7 @@ const createProperty = catchAsyncErrors(async (req, res, next) => {
   // create new property
   const property = new Property(req.body);
 
-  // if promo period hasn't expired auto publish property for free
+  // if promo period hasn't expired auto list property for free
   // promo is 1 year so convert down to milliseconds
   const promoPeriod =
     parseInt(process.env.PROMO_PERIOD) * 12 * 30 * 24 * 60 * 60 * 1000;
@@ -1099,7 +1100,7 @@ const updateProperty = catchAsyncErrors(async (req, res, next) => {
     );
   }
 
-  objectAssign(req.body, property);
+  objectAssign(req.body, property, { mode: 'nostrict' });
 
   await property.save();
 
@@ -1508,26 +1509,26 @@ const preventUnverifiedAccounts = catchAsyncErrors(
   }
 );
 
-const router$3 = express.Router();
+const router$2 = express.Router();
 
 const properties = '/properties';
 const propertyRoute = `${properties}/:propertyId`;
 
-router$3
+router$2
   .route(properties)
   .get(fetchProperties)
   .post(authenticate(), preventUnverifiedAccounts, createProperty);
 
-router$3.get(`${properties}/my-properties`, authenticate(), fetchMyProperties);
+router$2.get(`${properties}/my-properties`, authenticate(), fetchMyProperties);
 
-router$3
+router$2
   .route(propertyRoute)
   .get(fetchProperty)
   .patch(authenticate(), updateProperty)
   .delete(authenticate(), removeProperty);
 
 // add images to property
-router$3.post(
+router$2.post(
   `${propertyRoute}/images`,
   authenticate(),
   uploader({ files: 40 }).any(),
@@ -1535,14 +1536,14 @@ router$3.post(
 );
 
 // remove a property image
-router$3.post(
+router$2.post(
   `${propertyRoute}/images/delete`,
   authenticate(),
   removePropertyImages
 );
 
 // SYSTEM SPECIFIC ROUTES
-router$3
+router$2
   .route('system/properties/:propertyId')
   .patch(authenticate('system'), updateProperty)
   .delete(authenticate('system'), removeProperty);
@@ -2013,7 +2014,7 @@ const systemAdminPasswordChange = catchAsyncErrors(
   }
 );
 
-const router$2 = express.Router();
+const router$1 = express.Router();
 
 const parentRoute = '/accounts';
 
@@ -2022,125 +2023,94 @@ const systemParentRoute = `/system${parentRoute}`;
 /** AUTHENTICATED */
 
 // logout
-router$2.post(`${parentRoute}/signout`, authenticate(), signout);
+router$1.post(`${parentRoute}/signout`, authenticate(), signout);
 
 // fetch my account
-router$2.get(`${parentRoute}/my-account`, authenticate(), getMyAccount);
+router$1.get(`${parentRoute}/my-account`, authenticate(), getMyAccount);
 
 /** NOT AUTHENTICATED */
 
-router$2.post(`${parentRoute}/signup`, uploader().single('avatar'), signup);
+router$1.post(`${parentRoute}/signup`, uploader().single('avatar'), signup);
 
-router$2.post(`${parentRoute}/signin`, signin);
+router$1.post(`${parentRoute}/signin`, signin);
 
-router$2.post(`${parentRoute}/forgot-my-password`, forgotMyPassword);
+router$1.post(`${parentRoute}/forgot-my-password`, forgotMyPassword);
 
-router$2.patch(`${parentRoute}/reset-my-password/:resetToken`, resetMyPassword);
+router$1.patch(`${parentRoute}/reset-my-password/:resetToken`, resetMyPassword);
 
 /** AUTHENTICATED */
 
-router$2.patch(
+router$1.patch(
   `${parentRoute}/change-my-password`,
   authenticate(),
   changeMyPassword
 );
 
-router$2.patch(
+router$1.patch(
   `${parentRoute}/update-my-account`,
   authenticate(),
   updateMyAccount
 );
 
 // verify account
-router$2.get(`${parentRoute}/verify/:code`, authenticate(), verifyAccount);
+router$1.get(`${parentRoute}/verify/:code`, authenticate(), verifyAccount);
 
 // send verification code
-router$2.get(
+router$1.get(
   `${parentRoute}/verification-code`,
   authenticate(),
   sendVerficationCode
 );
 
 // SYSTEM ROUTES
-router$2.post(`${systemParentRoute}/signin`, systemSignIn);
-router$2.post(`${systemParentRoute}/signout`, authenticate('system'), signout);
-router$2.patch(
+router$1.post(`${systemParentRoute}/signin`, systemSignIn);
+router$1.post(`${systemParentRoute}/signout`, authenticate('system'), signout);
+router$1.patch(
   `${systemParentRoute}/change-my-password`,
   authenticate('system'),
   changeMyPassword
 );
 
 // ADMIN ROUTES
-router$2.get(
+router$1.get(
   `${systemParentRoute}/my-account`,
   authenticate('system'),
   getMyAccount
 );
 
-router$2.post(
+router$1.post(
   `${systemParentRoute}/create-account`,
   authenticate('system'),
   allowAccessTo('admin', 'sub-admin'),
   systemAdminCreateAccount
 );
-router$2.patch(
+router$1.patch(
   `${systemParentRoute}/update-account/:accountId`,
   authenticate('system'),
   allowAccessTo('admin', 'sub-admin'),
   systemAdminAccountUpdate
 );
-router$2.delete(
+router$1.delete(
   `${systemParentRoute}/delete-account/:accountId`,
   authenticate('system'),
   allowAccessTo('admin', 'sub-admin'),
   systemAdminRemoveAccount
 );
-router$2.patch(
+router$1.patch(
   `${systemParentRoute}/change-password/:accountId`,
   authenticate('system'),
   allowAccessTo('admin', 'sub-admin'),
   systemAdminPasswordChange
 );
 
-const autocompletePlaces = catchAsyncErrors(async (req, res, next) => {
-  // google access key
-  const { GOOGLE_ACCESS_KEY } = process.env;
-  // user typed input
-  const { address } = req.query;
-
-  if (!address)
-    return next(
-      new ServerError('An address is required to perform places autocomplete')
-    );
-  // request options
-  const options = `language=fr&components=country:gn`;
-  // url to google places API
-  const placesUrl =
-    'https://maps.googleapis.com/maps/api/place/autocomplete/json';
-
-  const response = await axios({
-    url: `${placesUrl}?input=${address}&${options}&key=${GOOGLE_ACCESS_KEY}`,
-  });
-
-  console.log(response);
-
-  res.json(response.data);
-});
-
-const router$1 = express.Router();
-
-router$1.get('/places', autocompletePlaces);
-
 const router = express.Router();
 
 // API main routes
 
 // Accounts Router
-router.use('/', router$2);
-// Properties Router
-router.use('/', router$3);
-// Geocoding Router
 router.use('/', router$1);
+// Properties Router
+router.use('/', router$2);
 
 // start db connection
 const connectToDb = async () => {
@@ -2230,7 +2200,7 @@ const setupExpressMiddleware = server => {
   // server.get('api./subdomain', (req, res) => res.send('Test working...'));
 
   // WEB SERVER ROUTES
-  server.use('/', router$4);
+  server.use('/', router$3);
 
   // API ROUTES
   server.use('/api/v1', router);
@@ -2243,7 +2213,10 @@ const setupExpressMiddleware = server => {
 };
 
 // Port listener
-const listen = async (server, port = process.env.PORT || 9090) => {
+const listen = async (
+  server,
+  port = parseInt(process.env.PORT) || 9090
+) => {
   try {
     await server.listen(port, console.log);
     console.log('listening on port 9090');

@@ -1,4 +1,4 @@
-import Account from '../schemas/account';
+import Account from '../schemas/account/index';
 import { ServerError, catchAsyncErrors } from './errors';
 import {
   generateAccountEmail,
@@ -10,7 +10,7 @@ import {
   setCookie,
   uploadAvatar,
 } from '../utils';
-import Property from '../schemas/property';
+import Property from '../schemas/property/index';
 import { removeFroms3 } from '../s3';
 
 // REGULAR USER HANDLERS

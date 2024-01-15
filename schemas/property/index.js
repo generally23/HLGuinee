@@ -2,8 +2,7 @@ import mongoose from 'mongoose';
 import { deleteProps, preProcessImage } from '../../utils';
 import { locationSchema } from './location';
 import { imageSchema } from './image';
-
-// helper functions
+import { price } from './price';
 
 // create ascending & desc index in a field in one go
 const createAscDescIndex = (schema, field) => {
@@ -23,6 +22,7 @@ const propertySchema = new mongoose.Schema(
       enum: ['house', 'land'],
       lowercase: true,
     },
+
     purpose: {
       type: String,
       enum: ['rent', 'sell'],
@@ -35,6 +35,9 @@ const propertySchema = new mongoose.Schema(
         },
       },
     },
+
+    price,
+
     // only allowed for houses
     rentPeriod: {
       type: String,
@@ -43,35 +46,21 @@ const propertySchema = new mongoose.Schema(
       },
       enum: ['monthly'],
     },
+
     ownerId: {
       required: [true, 'A property must have an owner'],
       type: mongoose.Schema.Types.ObjectId,
     },
-    price: {
-      type: Number,
-      required: [true, 'A property needs a price'],
-      // price must not be less than 5M for selling and less than 100K for rent
-      min: [
-        function () {
-          this.purpose === 'rent' ? 100_000 : 5_000_000;
-        },
-        'A property price cannot be less than this amount',
-      ],
-      // price must not be past billions for selling and past 10M for rent
-      max: [
-        function () {
-          this.purpose === 'rent' ? 10_000_000 : 900_000_000_000;
-        },
-        'A property price cannot exceed this amount',
-      ],
-    },
+
     location: {
       type: locationSchema,
       required: [true, 'A property must have gps coordinates'],
     },
-    documented: {
-      type: Boolean,
-    },
+
+    // documented: {
+    //   type: Boolean,
+    // },
+
     address: {
       type: String,
       required: [true, 'A property must have an address'],
@@ -79,7 +68,7 @@ const propertySchema = new mongoose.Schema(
     },
 
     imagesNames: [imageSchema],
-    // area
+
     area: {
       type: Number,
       required: [true, 'Area is required'],
@@ -102,11 +91,11 @@ const propertySchema = new mongoose.Schema(
         message: 'area built is only for a house',
       },
     },
-    // area unit
+
     areaUnit: {
       type: String,
       required: [true, 'Area unit is required'],
-      default: 'square meter',
+      default: 'm²',
     },
 
     title: {
@@ -114,19 +103,18 @@ const propertySchema = new mongoose.Schema(
       max: [60, 'A title cannot exceed 60 characters'],
       required: [true, 'A property needs a title'],
     },
-    // description
+
     description: {
       type: String,
+      max: [1500, 'The description cannot be longer than 512 characters'],
     },
+
     status: {
       type: String,
-      enum: ['available', 'pending', 'sold'],
+      enum: ['unlisted', 'listed', 'pending', 'sold', 'rented'],
+      default: 'unlisted',
     },
-    published: {
-      type: Boolean,
-      required: [true, 'A property must have a published field'],
-      default: false,
-    },
+
     rooms: {
       type: Number,
       required: [
@@ -140,100 +128,89 @@ const propertySchema = new mongoose.Schema(
         message: 'Rooms are only for a house',
       },
     },
-    // bathrooms:
-    externalBathrooms: {
+
+    bathrooms: {
       type: Number,
       required: [
         function () {
           return this.type === 'house';
         },
-        'External bathrooms is required',
+        'bathrooms is required',
       ],
       validate: {
         validator,
-        message: 'External Bathrooms are only for a house',
+        message: 'Bathrooms are only for a house',
       },
     },
 
-    internalBathrooms: {
+    kitchens: {
       type: Number,
+      default: function () {
+        return this.type === 'house' ? 0 : undefined;
+      },
       required: [
         function () {
           return this.type === 'house';
         },
-        'Internal bathrooms is required',
+        'kitchens is required',
       ],
       validate: {
         validator,
-        message: 'Internal Bathrooms are only for a house',
+        message: 'kitchens is only for houses',
       },
     },
-    hasCuisine: {
-      type: Boolean,
+
+    garages: {
+      type: Number,
       default: function () {
-        return this.type === 'house' ? false : undefined;
+        return this.type === 'house' ? 0 : undefined;
       },
       required: [
         function () {
           return this.type === 'house';
         },
-        'Cuisine is required',
+        'garages is required',
       ],
       validate: {
         validator,
-        message: 'Cuisine is only for houses',
+        message: 'Garages are only for a house',
       },
     },
-    hasGarage: {
-      type: Boolean,
+
+    diningRooms: {
+      type: Number,
       default: function () {
-        return this.type === 'house' ? false : undefined;
+        return this.type === 'house' ? 0 : undefined;
       },
       required: [
         function () {
           return this.type === 'house';
         },
-        'Garage is required',
-      ],
-      validate: {
-        validator,
-        message: 'Garage is only for a house',
-      },
-    },
-    // sale a manger
-    hasDiningRoom: {
-      type: Boolean,
-      default: function () {
-        return this.type === 'house' ? false : undefined;
-      },
-      required: [
-        function () {
-          return this.type === 'house';
-        },
-        'Dining room is required',
+        'diningRooms is required',
       ],
       validate: {
         validator,
         message: 'Dining rooms are only for a house',
       },
     },
-    // salon
-    hasLivingRoom: {
-      type: Boolean,
+
+    livingRooms: {
+      type: Number,
       default: function () {
-        return this.type === 'house' ? false : undefined;
+        return this.type === 'house' ? 0 : undefined;
       },
       required: [
         function () {
           return this.type === 'house';
         },
-        'Living room is required',
+        'livingRooms is required',
       ],
       validate: {
         validator,
         message: 'Living rooms are only for a house',
       },
     },
+
     yearBuilt: {
       type: Number,
       // minium property built year
@@ -250,6 +227,7 @@ const propertySchema = new mongoose.Schema(
         'A house property must have a year built',
       ],
     },
+
     // cloturé
     fenced: {
       type: Boolean,
@@ -259,16 +237,16 @@ const propertySchema = new mongoose.Schema(
       required: [true, 'Fenced is required'],
     },
 
-    hasPool: {
-      type: Boolean,
+    pools: {
+      type: Number,
       default: function () {
-        return this.type === 'house' ? false : undefined;
+        return this.type === 'house' ? 0 : undefined;
       },
       required: [
         function () {
           return this.type === 'house';
         },
-        'Pool is required',
+        'pools is required',
       ],
       validate: {
         validator,

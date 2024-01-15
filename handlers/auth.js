@@ -1,8 +1,7 @@
 import { verify } from 'jsonwebtoken';
 import { ServerError } from './errors';
-import Account from '../schemas/account';
+import Account from '../schemas/account/index';
 import { catchAsyncErrors } from './errors';
-import axios from 'axios';
 
 export const authenticate = (type = 'client') => {
   return catchAsyncErrors(async (req, res, next) => {
