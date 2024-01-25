@@ -338,7 +338,24 @@ const uploadPropertyImages = async (images, property) => {
   }
 };
 
-const sendEmail = async content => {
+// export const sendEmail2 = content => {
+//   const transporter = nodemailer.createTransport({
+//     host: 'smtp-relay.brevo.com',
+//     port: 587,
+//     auth: {
+//       user: 'rallygene0@gmail.com',
+//       pass: 'FvtRrDY5WV9hTPJn',
+//     },
+//   });
+
+//   return transporter.sendMail(content);
+// };
+
+const sendEmail = content => {
+  let attempts = 0;
+  let maxAttempts = 3;
+  let timeout = 0;
+
   const transporter = nodemailer.createTransport({
     host: 'smtp-relay.brevo.com',
     port: 587,
@@ -348,7 +365,26 @@ const sendEmail = async content => {
     },
   });
 
-  return await transporter.sendMail(content);
+  return new Promise((resolve, reject) => {
+    const sender = async () => {
+      attempts++;
+
+      console.log('I am sending the email ', attempts);
+
+      if (attempts >= maxAttempts) return reject('failed to send mail');
+
+      try {
+        await transporter.sendMail(content);
+
+        resolve('sent');
+      } catch (error) {
+        // timeout += 1000;
+        setTimeout(sender, timeout);
+      }
+    };
+
+    return sender();
+  });
 };
 
 const hashToken = raw => {
@@ -1642,7 +1678,8 @@ const signout = catchAsyncErrors(async (req, res, next) => {
   await account.save();
 
   // remove cookie (not required)
-  setCookie(res, 'token', undefined, { maxAge: 0 });
+  // setCookie(res, 'token', undefined, { maxAge: 0 });
+  res.clearCookie('token');
 
   res.status(204).json({});
 });
@@ -1709,6 +1746,27 @@ const updateMyAccount = catchAsyncErrors(async (req, res, next) => {
   res.json(account);
 });
 
+const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
+  // alongside delete offers and properties created by this account
+  // id of logged in account
+  const accountId = req.account.id;
+  // find all properties owned by this account
+  const myProperties = await Property.find({ ownerId: accountId }).lean();
+  // remove images of all properties made by this account from s3 bucket
+  for (let property of myProperties) {
+    const images = property.imagesNames;
+    for (let image of images) {
+      await removeFroms3(image.names);
+    }
+  }
+  // delete all properties owned by this account
+  await Property.deleteMany({ ownerId: accountId });
+  // finally delete account
+  await Account.deleteOne({ _id: req.account.id });
+  // respond to client
+  res.status(204).json();
+});
+
 const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
   const { email } = req.body;
 
@@ -1741,14 +1799,13 @@ const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
   try {
     await sendEmail(mail);
   } catch (e) {
-    console.log(e);
+    // console.log(e);
     return next(
       new ServerError('Unfortunately we could not send you an email!')
     );
   }
 
-  // res.json({ resetToken });
-  res.json({});
+  res.json({ resetToken });
 });
 
 const resetMyPassword = catchAsyncErrors(async (req, res, next) => {
@@ -2022,11 +2079,20 @@ const systemParentRoute = `/system${parentRoute}`;
 
 /** AUTHENTICATED */
 
+router$1
+  .route(`${parentRoute}/my-account`)
+
+  // fetch my account
+  .get(authenticate(), getMyAccount)
+
+  // update my account
+  .patch(authenticate(), updateMyAccount)
+
+  // remove my account
+  .delete(authenticate(), deleteMyAccount);
+
 // logout
 router$1.post(`${parentRoute}/signout`, authenticate(), signout);
-
-// fetch my account
-router$1.get(`${parentRoute}/my-account`, authenticate(), getMyAccount);
 
 /** NOT AUTHENTICATED */
 
@@ -2044,12 +2110,6 @@ router$1.patch(
   `${parentRoute}/change-my-password`,
   authenticate(),
   changeMyPassword
-);
-
-router$1.patch(
-  `${parentRoute}/update-my-account`,
-  authenticate(),
-  updateMyAccount
 );
 
 // verify account
@@ -2111,6 +2171,9 @@ const router = express.Router();
 router.use('/', router$1);
 // Properties Router
 router.use('/', router$2);
+
+// Handle 404 Not found
+router.all('/*', unroutable);
 
 // start db connection
 const connectToDb = async () => {
@@ -2205,8 +2268,13 @@ const setupExpressMiddleware = server => {
   // API ROUTES
   server.use('/api/v1', router);
 
-  // Handle 404 Not found
-  server.all('*', unroutable);
+  /* 
+    Always serve the same html file since this is a single page app
+    React will handle the routing on the client
+  */
+  server.all('*', (req, res) =>
+    res.sendFile(path.resolve(__dirname, 'public', 'index.html'))
+  );
 
   // Global Error handler
   server.use(globalErrorHandler);

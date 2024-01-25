@@ -107,7 +107,8 @@ export const signout = catchAsyncErrors(async (req, res, next) => {
   await account.save();
 
   // remove cookie (not required)
-  setCookie(res, 'token', undefined, { maxAge: 0 });
+  // setCookie(res, 'token', undefined, { maxAge: 0 });
+  res.clearCookie('token');
 
   res.status(204).json({});
 });
@@ -227,14 +228,13 @@ export const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
   try {
     await sendEmail(mail);
   } catch (e) {
-    console.log(e);
+    // console.log(e);
     return next(
       new ServerError('Unfortunately we could not send you an email!')
     );
   }
 
-  // res.json({ resetToken });
-  res.json({});
+  res.json({ resetToken });
 });
 
 export const resetMyPassword = catchAsyncErrors(async (req, res, next) => {

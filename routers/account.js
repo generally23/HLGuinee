@@ -28,11 +28,20 @@ const systemParentRoute = `/system${parentRoute}`;
 
 /** AUTHENTICATED */
 
+router
+  .route(`${parentRoute}/my-account`)
+
+  // fetch my account
+  .get(authenticate(), getMyAccount)
+
+  // update my account
+  .patch(authenticate(), updateMyAccount)
+
+  // remove my account
+  .delete(authenticate(), deleteMyAccount);
+
 // logout
 router.post(`${parentRoute}/signout`, authenticate(), signout);
-
-// fetch my account
-router.get(`${parentRoute}/my-account`, authenticate(), getMyAccount);
 
 /** NOT AUTHENTICATED */
 
@@ -50,12 +59,6 @@ router.patch(
   `${parentRoute}/change-my-password`,
   authenticate(),
   changeMyPassword
-);
-
-router.patch(
-  `${parentRoute}/update-my-account`,
-  authenticate(),
-  updateMyAccount
 );
 
 // verify account

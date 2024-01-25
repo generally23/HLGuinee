@@ -187,7 +187,24 @@ export const uploadPropertyImages = async (images, property) => {
   }
 };
 
-export const sendEmail = async content => {
+// export const sendEmail2 = content => {
+//   const transporter = nodemailer.createTransport({
+//     host: 'smtp-relay.brevo.com',
+//     port: 587,
+//     auth: {
+//       user: 'rallygene0@gmail.com',
+//       pass: 'FvtRrDY5WV9hTPJn',
+//     },
+//   });
+
+//   return transporter.sendMail(content);
+// };
+
+export const sendEmail = content => {
+  let attempts = 0;
+  let maxAttempts = 3;
+  let timeout = 0;
+
   const transporter = nodemailer.createTransport({
     host: 'smtp-relay.brevo.com',
     port: 587,
@@ -197,7 +214,26 @@ export const sendEmail = async content => {
     },
   });
 
-  return await transporter.sendMail(content);
+  return new Promise((resolve, reject) => {
+    const sender = async () => {
+      attempts++;
+
+      console.log('I am sending the email ', attempts);
+
+      if (attempts >= maxAttempts) return reject('failed to send mail');
+
+      try {
+        await transporter.sendMail(content);
+
+        resolve('sent');
+      } catch (error) {
+        // timeout += 1000;
+        setTimeout(sender, timeout);
+      }
+    };
+
+    return sender();
+  });
 };
 
 export const hashToken = raw => {
@@ -226,6 +262,7 @@ export const parseStringToBoolean = (source = {}, ...properties) => {
   for (let property of properties) {
     if (source[property] === 'true' || source[property] === '')
       source[property] = true;
+
     if (source[property] === 'false') source[property] = false;
   }
   return source;

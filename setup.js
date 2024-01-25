@@ -1,5 +1,5 @@
 import express from 'express';
-import { resolve } from 'path';
+import path, { resolve } from 'path';
 import mongoose from 'mongoose';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -12,7 +12,7 @@ import SERVER_ROUTER from './routers/Webserver';
 import API_ROUTER from './routers/Api';
 
 import dotenv from 'dotenv';
-import { unroutable, globalErrorHandler } from './handlers/errors';
+import { globalErrorHandler } from './handlers/errors';
 import Account from './schemas/account/index';
 import { generateDfPassword } from './utils';
 
@@ -111,8 +111,13 @@ export const setupExpressMiddleware = server => {
   // API ROUTES
   server.use('/api/v1', API_ROUTER);
 
-  // Handle 404 Not found
-  server.all('*', unroutable);
+  /* 
+    Always serve the same html file since this is a single page app
+    React will handle the routing on the client
+  */
+  server.all('*', (req, res) =>
+    res.sendFile(path.resolve(__dirname, 'public', 'index.html'))
+  );
 
   // Global Error handler
   server.use(globalErrorHandler);
