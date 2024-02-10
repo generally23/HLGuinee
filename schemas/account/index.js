@@ -10,51 +10,60 @@ const accountSchema = new mongoose.Schema(
   {
     firstname: {
       type: String,
-      minlength: [4, 'Firstname cannot be less than 4 characetrs'],
-      maxlength: [15, 'Firstname cannot exceed 15 characters'],
-      required: [true, 'Firstname is required'],
+      minlength: [4, 'Prénom ne peut pas etre moins de 4 lettres'],
+      maxlength: [15, 'Prénom ne peut pas etre plus de 15 lettres'],
+      required: [true, 'Prénom est réquis'],
       lowercase: true,
     },
+
     lastname: {
       type: String,
-      minlength: [2, 'Lastname cannot be less than 2 characetrs'],
-      maxlength: [10, 'Lastname cannot exceed 10 characters'],
-      required: [true, 'Lastname is required'],
+      minlength: [4, 'Nom ne peut pas etre moins de 2 lettres'],
+      maxlength: [15, 'Nom ne peut pas etre plus de 10 lettres'],
+      required: [true, 'Nom est réquis'],
       lowercase: true,
     },
+
     email: {
       type: String,
-      required: [true, 'Email is required'],
-      unique: [true, 'Email already exist'],
+      required: [true, 'Email est réquis'],
+      unique: [true, 'Ce email existe déjà'],
       lowercase: true,
       validate: {
         validator: value => emailValidator.validate(value),
-        message: 'Invalid email address',
+        message: 'Addresse email non valide',
       },
     },
+
     phoneNumber: {
       type: String,
       // validate phone number
       validate: {
         validator: value => /^[67][05678]\d{7}$/.test(value),
-        message: 'Invalid phone number',
+        message: 'Numéro de teléphone non valide',
       },
     },
+
     role: {
       type: String,
       enum: ['admin', 'sub-admin', 'agent', 'client'],
-      required: [true, 'An must have a role'],
+      required: [true, 'Un compte doit avoir un role'],
       default: 'client',
     },
+
     password: {
       type: String,
-      required: [true, 'Password is required'],
+      required: [true, 'Mot de passe réquis'],
     },
+
     avatarNames: [String],
+
     dob: {
       type: Date,
     },
+
     tokens: [String],
+
     resetToken: {
       type: String,
     },
@@ -64,17 +73,21 @@ const accountSchema = new mongoose.Schema(
     ip: {
       type: String,
     },
+
     signedIn: {
       type: Date,
     },
+
     signedOut: {
       type: Date,
     },
+
     verified: {
       type: Boolean,
-      required: [true, 'Verified is required'],
+      required: [true, 'Verifié est réquis'],
       default: false,
     },
+
     verificationCode: String,
 
     verificationCodeExpirationDate: Date,
@@ -113,7 +126,7 @@ accountSchema.pre('save', async function (next) {
 
   if (passwordLength < minlength || passwordLength > maxlength) {
     return next(
-      new ServerError('Your password is either too short or too long', 400)
+      new ServerError('Ton mot de passe est soit trop petit ou trop long', 400)
     );
   }
 

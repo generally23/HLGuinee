@@ -9,7 +9,7 @@ import {
   addPropertyImages,
   removePropertyImages,
   fetchMyProperties,
-} from '../handlers/property';
+} from '../handlers/property/index';
 import { authenticate, preventUnverifiedAccounts } from '../handlers/auth';
 
 const router = express.Router();

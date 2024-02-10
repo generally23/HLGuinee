@@ -10,14 +10,17 @@ import {
   deleteMyAccount,
   updateMyAccount,
   changeMyPassword,
+  verifyAccount,
+  sendVerficationCode,
+} from '../handlers/account/client';
+import {
   systemAdminCreateAccount,
   systemAdminPasswordChange,
   systemAdminRemoveAccount,
   systemAdminAccountUpdate,
   systemSignIn,
-  verifyAccount,
-  sendVerficationCode,
-} from '../handlers/account';
+} from '../handlers/account/system';
+
 import { uploader } from '../utils';
 
 const router = express.Router();

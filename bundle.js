@@ -647,13 +647,20 @@ const locationSchema = new mongoose.Schema({
   },
   coordinates: {
     type: [Number],
-    required: [true, 'location coordinates are required'],
+    required: [true, 'Un bien doit avoir des coordonées GPS'],
     validator: {
       validate(value) {
+        const [longitude, latitude] = value;
+
         // values must be 2 Numbers
-        return value.length === 2;
+        return (
+          value.length === 2 &&
+          typeof longitude === 'number' &&
+          typeof latitude === 'number'
+        );
       },
-      message: 'Coordinates need a Longitude and a Latitude',
+      message:
+        'Les coordonnées GPS doivent avoir une longitude et une latitude',
     },
   },
 });
@@ -661,7 +668,7 @@ const locationSchema = new mongoose.Schema({
 const imageSchema = new mongoose.Schema({
   sourceName: {
     type: String,
-    required: [true, 'sourceName is required'],
+    required: [true, 'sourceName est réquis'],
   },
   names: [String],
 });
@@ -709,7 +716,7 @@ const propertySchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      required: [true, 'A property must be of type land or house'],
+      required: [true, 'Un bien doit être soit une maison où un terrain'],
       enum: ['house', 'land'],
       lowercase: true,
     },
@@ -717,7 +724,7 @@ const propertySchema = new mongoose.Schema(
     purpose: {
       type: String,
       enum: ['rent', 'sell'],
-      required: [true, 'A house must have a purpose'],
+      required: [true, 'Un motif du bien est réquis, soit a vendre où a louer'],
       validate: {
         validator(value) {
           // property can't be land and be rented for now
@@ -739,13 +746,13 @@ const propertySchema = new mongoose.Schema(
     },
 
     ownerId: {
-      required: [true, 'A property must have an owner'],
+      required: [true, 'Un bien doit avoir un propriétaire'],
       type: mongoose.Schema.Types.ObjectId,
     },
 
     location: {
       type: locationSchema,
-      required: [true, 'A property must have gps coordinates'],
+      required: [true, 'Un bien doit avoir une localisation GPS'],
     },
 
     // documented: {
@@ -754,7 +761,7 @@ const propertySchema = new mongoose.Schema(
 
     address: {
       type: String,
-      required: [true, 'A property must have an address'],
+      required: [true, 'Un bien doit avoir un quartier'],
       lowercase: true,
     },
 
@@ -762,7 +769,7 @@ const propertySchema = new mongoose.Schema(
 
     area: {
       type: Number,
-      required: [true, 'Area is required'],
+      required: [true, 'Surface est réquise'],
     },
 
     areaBuilt: {
@@ -771,7 +778,7 @@ const propertySchema = new mongoose.Schema(
         function () {
           this.type === 'house';
         },
-        'Area built is required',
+        'Surface Batie est réquise',
       ],
       default: function () {
         // if property is a house and user did not set this property set to area
@@ -779,29 +786,31 @@ const propertySchema = new mongoose.Schema(
       },
       validate: {
         validator,
-        message: 'area built is only for a house',
+        message: 'Surface Batie est permis que pour les maisons',
       },
     },
 
     areaUnit: {
       type: String,
-      required: [true, 'Area unit is required'],
+      required: [true, 'Unité de surface réquise'],
       default: 'm²',
     },
 
     title: {
       type: String,
-      max: [60, 'A title cannot exceed 60 characters'],
-      required: [true, 'A property needs a title'],
+      max: [60, 'Un titre ne peut pas être plus de 60 lettres'],
+      required: [true, `Un bien a besoin d'un titre`],
     },
 
     description: {
       type: String,
-      max: [1500, 'The description cannot be longer than 512 characters'],
+      required: ['Une description est réquise'],
+      max: [1500, 'Une description ne peut pas être plus de 512 lettres'],
     },
 
     status: {
       type: String,
+      required: [true, 'Status est réquis'],
       enum: ['unlisted', 'listed', 'pending', 'sold', 'rented'],
       default: 'unlisted',
     },
@@ -812,11 +821,11 @@ const propertySchema = new mongoose.Schema(
         function () {
           return this.type === 'house';
         },
-        'A house must have rooms',
+        'Chambres est réquise',
       ],
       validate: {
         validator,
-        message: 'Rooms are only for a house',
+        message: 'Chambres est permis que pour les maisons',
       },
     },
 
@@ -826,11 +835,11 @@ const propertySchema = new mongoose.Schema(
         function () {
           return this.type === 'house';
         },
-        'bathrooms is required',
+        'Douches est réquis is required',
       ],
       validate: {
         validator,
-        message: 'Bathrooms are only for a house',
+        message: 'Douches est permis que pour les maisons',
       },
     },
 
@@ -843,11 +852,11 @@ const propertySchema = new mongoose.Schema(
         function () {
           return this.type === 'house';
         },
-        'kitchens is required',
+        'Cuisine est réquise',
       ],
       validate: {
         validator,
-        message: 'kitchens is only for houses',
+        message: 'Cuisine est permis que pour les maisons',
       },
     },
 
@@ -860,11 +869,11 @@ const propertySchema = new mongoose.Schema(
         function () {
           return this.type === 'house';
         },
-        'garages is required',
+        'Garages est réquis',
       ],
       validate: {
         validator,
-        message: 'Garages are only for a house',
+        message: 'Les garages sont permis que pour les maisons',
       },
     },
 
@@ -881,7 +890,7 @@ const propertySchema = new mongoose.Schema(
       ],
       validate: {
         validator,
-        message: 'Dining rooms are only for a house',
+        message: 'Les sale à manger sont permis que pour les maisons',
       },
     },
 
@@ -898,24 +907,24 @@ const propertySchema = new mongoose.Schema(
       ],
       validate: {
         validator,
-        message: 'Living rooms are only for a house',
+        message: 'Les salons sont permis que pour les maisons',
       },
     },
 
     yearBuilt: {
       type: Number,
       // minium property built year
-      min: [1800, 'A property built year must be from year 1800'],
+      min: [1800, 'Un bien built year must be from year 1800'],
       // don't allow property buil year to be in the future
       max: [
         new Date().getFullYear(),
-        `A property built year can't be in the future`,
+        'Un bien ne peut pas etre construit dans le future',
       ],
       required: [
         function () {
           return this.type === 'house';
         },
-        'A house property must have a year built',
+        'Une maison doit avoir une année de construction',
       ],
     },
 
@@ -925,7 +934,7 @@ const propertySchema = new mongoose.Schema(
       default: function () {
         return this.type === 'house' ? false : undefined;
       },
-      required: [true, 'Fenced is required'],
+      required: [true, 'Cloture est réquise'],
     },
 
     pools: {
@@ -937,23 +946,16 @@ const propertySchema = new mongoose.Schema(
         function () {
           return this.type === 'house';
         },
-        'pools is required',
       ],
       validate: {
         validator,
-        message: 'Pool is only for a house',
+        message: 'Seul une maison possède de piscine',
       },
     },
     tags: [String],
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
-
-// indexes
-
-// propertySchema.index({
-//   location: '2dsphere',
-// });
 
 // Index all sortable fields
 
@@ -988,13 +990,20 @@ propertySchema.methods.toJSON = function () {
 
 const Property = mongoose.model('Property', propertySchema);
 
-Property.on('index', e => {
-  console.log(e);
-});
+const NO_LOCATION_ERROR_MESSAGE =
+  'Vous ne pouvez pas poster un bien sans ';
+
+const PROPERTY_NOTFOUND_ERROR_MESSAGE =
+  'This property does not exist on our server';
+
+const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 40;
+
+const MAX_IMAGE_ALLOWED_ERROR_MESSAGE = `Un bien ne peut pas avoir plus de ${maxImagesLength} photos`;
+
+const NOT_PERMITTED_ERROR_MESSAGE = `Vous n'êtes pas permis de performer ces actions`;
 
 const fetchProperties = catchAsyncErrors(async (req, res, next) => {
-  const { north_east_bounds } = req.headers;
-  const { south_west_bounds } = req.headers;
+  const { north_east_bounds, south_west_bounds } = req.headers;
 
   // location of user fetching properties
   const userLocation = {
@@ -1063,10 +1072,7 @@ const createProperty = catchAsyncErrors(async (req, res, next) => {
   const { location } = req.body;
 
   // send an error if no location is passed
-  if (!location)
-    return next(
-      new ServerError('Cannot create a property without a location', 400)
-    );
+  if (!location) return next(new ServerError(NO_LOCATION_ERROR_MESSAGE, 400));
 
   // check to see if coordinates are in Guinea
   const fullyInGuinea = true; // await insideGuinea(location.coordinates);
@@ -1102,9 +1108,7 @@ const fetchProperty = catchAsyncErrors(async (req, res, next) => {
   );
   // send an error if property does not exist
   if (!property) {
-    return next(
-      new ServerError('This property does not exist on our server', 404)
-    );
+    return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
   }
   // send property
   res.json(property);
@@ -1122,18 +1126,11 @@ const updateProperty = catchAsyncErrors(async (req, res, next) => {
 
   if (!property) {
     // error
-    return next(
-      new ServerError('This property does not exist on our server', 404)
-    );
+    return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
   }
 
   if (!property.ownerId.equals(req.account.id)) {
-    return next(
-      new ServerError(
-        'You do not have enough credentials to perform this action',
-        404
-      )
-    );
+    return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
   }
 
   objectAssign(req.body, property, { mode: 'nostrict' });
@@ -1149,9 +1146,7 @@ const removeProperty = catchAsyncErrors(async (req, res, next) => {
 
   // send error if property doesn't exist
   if (!property) {
-    return next(
-      new ServerError('This property does not exist on our server', 404)
-    );
+    return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
   }
 
   // only property owner and admin allowed accounts can delete
@@ -1165,12 +1160,7 @@ const removeProperty = catchAsyncErrors(async (req, res, next) => {
   console.log('Allowed: ', allowedAccounts.includes(req.account.role));
 
   if (!sameAccount || (!sameAccount && !isAllowed)) {
-    return next(
-      new ServerError(
-        'You do not have enough credentials to perform this action',
-        403
-      )
-    );
+    return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
   }
 
   // delete all images of property from s3
@@ -1196,9 +1186,7 @@ const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
 
   // send an error if property is not found
   if (!property) {
-    return next(
-      new ServerError('This property does not exist on our server', 404)
-    );
+    return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
   }
 
   // how many images are stored for this property
@@ -1213,12 +1201,7 @@ const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
     propertyImagesLength >= maxImagesLength ||
     propertyImagesLength + uploadedImages.length > maxImagesLength
   ) {
-    return next(
-      new ServerError(
-        `A property cannot have more than ${maxImagesLength} images`,
-        400
-      )
-    );
+    return next(new ServerError(MAX_IMAGE_ALLOWED_ERROR_MESSAGE, 400));
   }
 
   /* 
@@ -1247,17 +1230,13 @@ const removePropertyImages = catchAsyncErrors(async (req, res, next) => {
 
   // send an error if property is not found
   if (!property) {
-    return next(
-      new ServerError('This property does not exist on our server', 404)
-    );
+    return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
   }
 
   // allow only owner and admin to delete image
 
   if (!property.ownerId.equals(account.id)) {
-    return next(
-      new ServerError('You are not allowed to perform this action', 403)
-    );
+    return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
   }
 
   // imageNames
@@ -1291,51 +1270,60 @@ const accountSchema = new mongoose.Schema(
   {
     firstname: {
       type: String,
-      minlength: [4, 'Firstname cannot be less than 4 characetrs'],
-      maxlength: [15, 'Firstname cannot exceed 15 characters'],
-      required: [true, 'Firstname is required'],
+      minlength: [4, 'Prénom ne peut pas etre moins de 4 lettres'],
+      maxlength: [15, 'Prénom ne peut pas etre plus de 15 lettres'],
+      required: [true, 'Prénom est réquis'],
       lowercase: true,
     },
+
     lastname: {
       type: String,
-      minlength: [2, 'Lastname cannot be less than 2 characetrs'],
-      maxlength: [10, 'Lastname cannot exceed 10 characters'],
-      required: [true, 'Lastname is required'],
+      minlength: [4, 'Nom ne peut pas etre moins de 2 lettres'],
+      maxlength: [15, 'Nom ne peut pas etre plus de 10 lettres'],
+      required: [true, 'Nom est réquis'],
       lowercase: true,
     },
+
     email: {
       type: String,
-      required: [true, 'Email is required'],
-      unique: [true, 'Email already exist'],
+      required: [true, 'Email est réquis'],
+      unique: [true, 'Ce email existe déjà'],
       lowercase: true,
       validate: {
         validator: value => emailValidator.validate(value),
-        message: 'Invalid email address',
+        message: 'Addresse email non valide',
       },
     },
+
     phoneNumber: {
       type: String,
       // validate phone number
       validate: {
         validator: value => /^[67][05678]\d{7}$/.test(value),
-        message: 'Invalid phone number',
+        message: 'Numéro de teléphone non valide',
       },
     },
+
     role: {
       type: String,
       enum: ['admin', 'sub-admin', 'agent', 'client'],
-      required: [true, 'An must have a role'],
+      required: [true, 'Un compte doit avoir un role'],
       default: 'client',
     },
+
     password: {
       type: String,
-      required: [true, 'Password is required'],
+      required: [true, 'Mot de passe réquis'],
     },
+
     avatarNames: [String],
+
     dob: {
       type: Date,
     },
+
     tokens: [String],
+
     resetToken: {
       type: String,
     },
@@ -1345,17 +1333,21 @@ const accountSchema = new mongoose.Schema(
     ip: {
       type: String,
     },
+
     signedIn: {
       type: Date,
     },
+
     signedOut: {
       type: Date,
     },
+
     verified: {
       type: Boolean,
-      required: [true, 'Verified is required'],
+      required: [true, 'Verifié est réquis'],
       default: false,
     },
+
     verificationCode: String,
 
     verificationCodeExpirationDate: Date,
@@ -1394,7 +1386,7 @@ accountSchema.pre('save', async function (next) {
 
   if (passwordLength < minlength || passwordLength > maxlength) {
     return next(
-      new ServerError('Your password is either too short or too long', 400)
+      new ServerError('Ton mot de passe est soit trop petit ou trop long', 400)
     );
   }
 
@@ -1584,12 +1576,26 @@ router$2
   .patch(authenticate('system'), updateProperty)
   .delete(authenticate('system'), removeProperty);
 
+const EXISTING_ACCOUNT_ERROR_MESSGE = 'Ce compte existe déjà';
+
+const UNEXISTING_ACCOUNT_ERROR_MESSAGE = `Ce compte n'existe pas`;
+
+const INVALID_PASSWORD_ERROR_MESSAGE = 'Ce mot de passe est non valide';
+
+const SAME_PASSWORD_ERROR_MESSAGE = `Votre nouveau mot de passe doit être different de l'actuel`;
+
+const VERIFIED_ACCOUNT_ERROR_MESSAGE = `Votre compte est déjà verifié`;
+
+const VERFIFY_ACCOUNT_FAIL_ERROR_MESSAGE = `Malheureusement, nous n'avions pas pu vérifier votre compte`;
+
+const MAIL_DELIVERY_FAIL_ERROR_MESSAGE = `Malheuresement notre service email n'a pas pu vous délivrer l'email`;
+
 // REGULAR USER HANDLERS
 const signup = catchAsyncErrors(async (req, res, next) => {
   // make sure this account does not exist before we create one
   if (await Account.findOne({ email: req.body.email })) {
     return next(
-      new ServerError('This account already exist. Please Log In!', 400)
+      new ServerError(`${EXISTING_ACCOUNT_ERROR_MESSGE}. Connecter vous`, 400)
     );
   }
   // create new account
@@ -1631,14 +1637,14 @@ const signin = catchAsyncErrors(async (req, res, next) => {
 
   if (!account) {
     // account does not exist err
-    return next(new ServerError('Account not found', 401));
+    return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 401));
   }
 
   // verify password
   const isPasswordValid = await account.validatePassword(password);
 
   if (!isPasswordValid) {
-    return next(new ServerError('Invalid password', 401));
+    return next(new ServerError(INVALID_PASSWORD_ERROR_MESSAGE, 401));
   }
 
   // store ip and last time user logged in
@@ -1671,14 +1677,15 @@ const signin = catchAsyncErrors(async (req, res, next) => {
 const signout = catchAsyncErrors(async (req, res, next) => {
   const { account, token } = req;
 
-  // log user out from server
+  // record signout date
   account.signedOut = Date.now();
+
+  // log user out from server
   account.tokens = account.tokens.filter(t => t !== token);
 
   await account.save();
 
   // remove cookie (not required)
-  // setCookie(res, 'token', undefined, { maxAge: 0 });
   res.clearCookie('token');
 
   res.status(204).json({});
@@ -1694,16 +1701,14 @@ const changeMyPassword = catchAsyncErrors(async (req, res, next) => {
   const { account } = req;
 
   if (currentPassword === password)
-    return next(
-      new ServerError('Your current and new password cannnot be the same', 400)
-    );
+    return next(new ServerError(SAME_PASSWORD_ERROR_MESSAGE, 400));
 
   // validate pwd
   const isPasswordValid = await account.validatePassword(currentPassword);
 
   // send error if not valid
   if (!isPasswordValid) {
-    return next(new ServerError('Invalid password', 401));
+    return next(new ServerError(INVALID_PASSWORD_ERROR_MESSAGE, 401));
   }
 
   // update pwd
@@ -1750,8 +1755,10 @@ const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
   // alongside delete offers and properties created by this account
   // id of logged in account
   const accountId = req.account.id;
+
   // find all properties owned by this account
-  const myProperties = await Property.find({ ownerId: accountId }).lean();
+  const myProperties = await Property.find({ ownerId: accountId });
+
   // remove images of all properties made by this account from s3 bucket
   for (let property of myProperties) {
     const images = property.imagesNames;
@@ -1761,6 +1768,7 @@ const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
   }
   // delete all properties owned by this account
   await Property.deleteMany({ ownerId: accountId });
+
   // finally delete account
   await Account.deleteOne({ _id: req.account.id });
   // respond to client
@@ -1774,9 +1782,7 @@ const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
 
   // send error
   if (!account) {
-    return next(
-      new ServerError('This account does not exist on our server', 401)
-    );
+    return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 401));
   }
 
   // generate reset token
@@ -1800,9 +1806,7 @@ const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
     await sendEmail(mail);
   } catch (e) {
     // console.log(e);
-    return next(
-      new ServerError('Unfortunately we could not send you an email!')
-    );
+    return next(new ServerError(MAIL_DELIVERY_FAIL_ERROR_MESSAGE));
   }
 
   res.json({ resetToken });
@@ -1826,36 +1830,26 @@ const resetMyPassword = catchAsyncErrors(async (req, res, next) => {
 
   // send error
   if (!account) {
-    return next(
-      new ServerError('This account does not exist on our server', 404)
-    );
+    return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 404));
   }
 
   // don't allow account to use the same password as current one
   if (await account.validatePassword(password)) {
-    return next(
-      new ServerError('Your current and new password cannot be the same', 400)
-    );
+    return next(new ServerError(SAME_PASSWORD_ERROR_MESSAGE, 400));
   }
 
   // update password and default reset token & exp date
-  // didn't use objectAssign because it's strict will not assign falsy values
-  account.resetToken = undefined;
-  account.resetTokenExpirationDate = undefined;
-  account.password = password;
 
-  console.log(account);
+  const newUpdates = {
+    resetToken: undefined,
+    resetTokenExpirationDate: undefined,
+    password: undefined,
+  };
 
-  // logout all tokens stored before pwd change and store new token
-  const token = generateJwt(account.id);
+  objectAssign(newUpdates, account, { mode: 'nostrict' });
 
-  account.tokens = [token];
-
-  // sign user in
-
-  setCookie(res, 'token', token);
-
-  res.setHeader('token', token);
+  // logout all tokens stored before pwd change
+  account.tokens = [];
 
   // save account
   await account.save();
@@ -1877,13 +1871,11 @@ const verifyAccount = catchAsyncErrors(async (req, res, next) => {
 
   // send error, no account found
   if (!account) {
-    return next(
-      new ServerError('Unfortunately, we could not verify your account', 400)
-    );
+    return next(new ServerError(VERFIFY_ACCOUNT_FAIL_ERROR_MESSAGE, 400));
   }
 
   if (account.verified) {
-    return next(new ServerError('Your account is already verified', 400));
+    return next(new ServerError(VERIFIED_ACCOUNT_ERROR_MESSAGE, 400));
   }
 
   // mark account as verified
@@ -1893,14 +1885,15 @@ const verifyAccount = catchAsyncErrors(async (req, res, next) => {
       verificationCode: undefined,
       verificationCodeExpirationDate: undefined,
     },
-    account
+    account,
+    { mode: 'nostrict' }
   );
 
   // save account
   await account.save();
 
   // respond to client
-  res.json({ message: 'Your account has successfully been verfified' });
+  res.json({ message: 'votre compte à été verifier avec succès' });
 });
 
 const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
@@ -1908,7 +1901,7 @@ const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
 
   // don't send code to email if user is already verified
   if (account.verified) {
-    return next(new ServerError('This account is already verified', 400));
+    return next(new ServerError(VERIFIED_ACCOUNT_ERROR_MESSAGE, 400));
   }
 
   // generate verification code
@@ -1928,10 +1921,7 @@ const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
   try {
     await sendEmail(mail);
   } catch (e) {
-    console.log(e);
-    return next(
-      new ServerError('Unfortunately we could not send you an email!')
-    );
+    return next(new ServerError(MAIL_DELIVERY_FAIL_ERROR_MESSAGE));
   }
 
   res.json({ verificationCode });
@@ -1952,14 +1942,14 @@ const systemSignIn = catchAsyncErrors(async (req, res, next) => {
 
   if (!account) {
     // account does not exist err
-    return next(new ServerError('Account not found', 401));
+    return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 401));
   }
 
   // verify password
   const isPasswordValid = await account.validatePassword(password);
 
   if (!isPasswordValid) {
-    return next(new ServerError('Invalid password', 401));
+    return next(new ServerError(INVALID_PASSWORD_ERROR_MESSAGE, 401));
   }
 
   objectAssign({ ip: req.ip, signedIn: Date.now() }, account);
@@ -1983,12 +1973,7 @@ const systemAdminCreateAccount = catchAsyncErrors(
   async (req, res, next) => {
     // don't allow admin accounts creations
     if (req.body.role === 'admin') {
-      return next(
-        new ServerError(
-          'You do not have permission to perform these actions',
-          403
-        )
-      );
+      return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
     }
 
     const account = new Account(req.body);
@@ -2015,7 +2000,7 @@ const systemAdminAccountUpdate = catchAsyncErrors(
     const account = await Account.findById(req.params.accountId);
     // if account does not exist send err
     if (!account) {
-      return next(new ServerError('Account not found', 401));
+      return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 401));
     }
     // update properties
     objectAssign({ firstname, lastname }, account);
@@ -2030,7 +2015,8 @@ const systemAdminRemoveAccount = catchAsyncErrors(
   async (req, res, next) => {
     const account = await Account.findById(req.params.accountId);
 
-    if (!account) return next(new ServerError('Account not found', 404));
+    if (!account)
+      return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 404));
 
     if (
       account.role === 'admin' ||
@@ -2038,9 +2024,7 @@ const systemAdminRemoveAccount = catchAsyncErrors(
         account.role === 'sub-admin' &&
         !account._id.equals(req.account.id))
     )
-      return next(
-        new ServerError("You're not allowed to perform these actions", 404)
-      );
+      return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
     // delete account
     await Account.deleteOne({ _id: req.params.accountId });
     // send response
@@ -2056,7 +2040,7 @@ const systemAdminPasswordChange = catchAsyncErrors(
     });
     // if account does not exist send err
     if (!account) {
-      return next(new ServerError('Account not found', 401));
+      return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 401));
     }
 
     // if (account.role === 'admin'account._id.equals(req.account.id)) {
@@ -2218,6 +2202,9 @@ const connectToDb = async () => {
   } catch (error) {
     console.log('Failed db connection');
     console.log(error);
+
+    // we can't do anything without db access, shutdown server
+    process.exit();
   }
 };
 
@@ -2237,9 +2224,11 @@ const setupExpressMiddleware = server => {
 
   // setup cors
   // server.use(cors());
+
   server.use(
     cors({
-      origin: 'http://localhost:3000',
+      origin: 'http://192.168.1.196:3000',
+      // origin: 'http://localhost:3000',
       credentials: true,
     })
   );
@@ -2287,10 +2276,14 @@ const listen = async (
 ) => {
   try {
     await server.listen(port, console.log);
+
     console.log('listening on port 9090');
+
     console.clear();
   } catch (error) {
+    // we must able to listen for connection on this port shutdown server
     console.log('failing to listen on port 9090');
+    process.exit();
   }
 };
 

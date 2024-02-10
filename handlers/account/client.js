@@ -1,24 +1,32 @@
-import Account from '../schemas/account/index';
-import { ServerError, catchAsyncErrors } from './errors';
+import Account from '../../schemas/account/index';
+import { ServerError, catchAsyncErrors } from '../errors';
 import {
-  generateAccountEmail,
-  generateDfPassword,
   generateJwt,
   hashToken,
   objectAssign,
   sendEmail,
   setCookie,
   uploadAvatar,
-} from '../utils';
-import Property from '../schemas/property/index';
-import { removeFroms3 } from '../s3';
+} from '../../utils';
+import Property from '../../schemas/property/index';
+import { removeFroms3 } from '../../s3';
+
+import {
+  EXISTING_ACCOUNT_ERROR_MESSGE,
+  UNEXISTING_ACCOUNT_ERROR_MESSAGE,
+  INVALID_PASSWORD_ERROR_MESSAGE,
+  SAME_PASSWORD_ERROR_MESSAGE,
+  VERIFIED_ACCOUNT_ERROR_MESSAGE,
+  VERFIFY_ACCOUNT_FAIL_ERROR_MESSAGE,
+  MAIL_DELIVERY_FAIL_ERROR_MESSAGE,
+} from './error_messages';
 
 // REGULAR USER HANDLERS
 export const signup = catchAsyncErrors(async (req, res, next) => {
   // make sure this account does not exist before we create one
   if (await Account.findOne({ email: req.body.email })) {
     return next(
-      new ServerError('This account already exist. Please Log In!', 400)
+      new ServerError(`${EXISTING_ACCOUNT_ERROR_MESSGE}. Connecter vous`, 400)
     );
   }
   // create new account
@@ -60,14 +68,14 @@ export const signin = catchAsyncErrors(async (req, res, next) => {
 
   if (!account) {
     // account does not exist err
-    return next(new ServerError('Account not found', 401));
+    return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 401));
   }
 
   // verify password
   const isPasswordValid = await account.validatePassword(password);
 
   if (!isPasswordValid) {
-    return next(new ServerError('Invalid password', 401));
+    return next(new ServerError(INVALID_PASSWORD_ERROR_MESSAGE, 401));
   }
 
   // store ip and last time user logged in
@@ -100,14 +108,15 @@ export const signin = catchAsyncErrors(async (req, res, next) => {
 export const signout = catchAsyncErrors(async (req, res, next) => {
   const { account, token } = req;
 
-  // log user out from server
+  // record signout date
   account.signedOut = Date.now();
+
+  // log user out from server
   account.tokens = account.tokens.filter(t => t !== token);
 
   await account.save();
 
   // remove cookie (not required)
-  // setCookie(res, 'token', undefined, { maxAge: 0 });
   res.clearCookie('token');
 
   res.status(204).json({});
@@ -123,16 +132,14 @@ export const changeMyPassword = catchAsyncErrors(async (req, res, next) => {
   const { account } = req;
 
   if (currentPassword === password)
-    return next(
-      new ServerError('Your current and new password cannnot be the same', 400)
-    );
+    return next(new ServerError(SAME_PASSWORD_ERROR_MESSAGE, 400));
 
   // validate pwd
   const isPasswordValid = await account.validatePassword(currentPassword);
 
   // send error if not valid
   if (!isPasswordValid) {
-    return next(new ServerError('Invalid password', 401));
+    return next(new ServerError(INVALID_PASSWORD_ERROR_MESSAGE, 401));
   }
 
   // update pwd
@@ -179,8 +186,10 @@ export const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
   // alongside delete offers and properties created by this account
   // id of logged in account
   const accountId = req.account.id;
+
   // find all properties owned by this account
-  const myProperties = await Property.find({ ownerId: accountId }).lean();
+  const myProperties = await Property.find({ ownerId: accountId });
+
   // remove images of all properties made by this account from s3 bucket
   for (let property of myProperties) {
     const images = property.imagesNames;
@@ -190,6 +199,7 @@ export const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
   }
   // delete all properties owned by this account
   await Property.deleteMany({ ownerId: accountId });
+
   // finally delete account
   await Account.deleteOne({ _id: req.account.id });
   // respond to client
@@ -203,9 +213,7 @@ export const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
 
   // send error
   if (!account) {
-    return next(
-      new ServerError('This account does not exist on our server', 401)
-    );
+    return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 401));
   }
 
   // generate reset token
@@ -229,9 +237,7 @@ export const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
     await sendEmail(mail);
   } catch (e) {
     // console.log(e);
-    return next(
-      new ServerError('Unfortunately we could not send you an email!')
-    );
+    return next(new ServerError(MAIL_DELIVERY_FAIL_ERROR_MESSAGE));
   }
 
   res.json({ resetToken });
@@ -255,36 +261,26 @@ export const resetMyPassword = catchAsyncErrors(async (req, res, next) => {
 
   // send error
   if (!account) {
-    return next(
-      new ServerError('This account does not exist on our server', 404)
-    );
+    return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 404));
   }
 
   // don't allow account to use the same password as current one
   if (await account.validatePassword(password)) {
-    return next(
-      new ServerError('Your current and new password cannot be the same', 400)
-    );
+    return next(new ServerError(SAME_PASSWORD_ERROR_MESSAGE, 400));
   }
 
   // update password and default reset token & exp date
-  // didn't use objectAssign because it's strict will not assign falsy values
-  account.resetToken = undefined;
-  account.resetTokenExpirationDate = undefined;
-  account.password = password;
 
-  console.log(account);
+  const newUpdates = {
+    resetToken: undefined,
+    resetTokenExpirationDate: undefined,
+    password: undefined,
+  };
 
-  // logout all tokens stored before pwd change and store new token
-  const token = generateJwt(account.id);
+  objectAssign(newUpdates, account, { mode: 'nostrict' });
 
-  account.tokens = [token];
-
-  // sign user in
-
-  setCookie(res, 'token', token);
-
-  res.setHeader('token', token);
+  // logout all tokens stored before pwd change
+  account.tokens = [];
 
   // save account
   await account.save();
@@ -306,13 +302,11 @@ export const verifyAccount = catchAsyncErrors(async (req, res, next) => {
 
   // send error, no account found
   if (!account) {
-    return next(
-      new ServerError('Unfortunately, we could not verify your account', 400)
-    );
+    return next(new ServerError(VERFIFY_ACCOUNT_FAIL_ERROR_MESSAGE, 400));
   }
 
   if (account.verified) {
-    return next(new ServerError('Your account is already verified', 400));
+    return next(new ServerError(VERIFIED_ACCOUNT_ERROR_MESSAGE, 400));
   }
 
   // mark account as verified
@@ -322,14 +316,15 @@ export const verifyAccount = catchAsyncErrors(async (req, res, next) => {
       verificationCode: undefined,
       verificationCodeExpirationDate: undefined,
     },
-    account
+    account,
+    { mode: 'nostrict' }
   );
 
   // save account
   await account.save();
 
   // respond to client
-  res.json({ message: 'Your account has successfully been verfified' });
+  res.json({ message: 'votre compte à été verifier avec succès' });
 });
 
 export const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
@@ -337,7 +332,7 @@ export const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
 
   // don't send code to email if user is already verified
   if (account.verified) {
-    return next(new ServerError('This account is already verified', 400));
+    return next(new ServerError(VERIFIED_ACCOUNT_ERROR_MESSAGE, 400));
   }
 
   // generate verification code
@@ -357,150 +352,8 @@ export const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
   try {
     await sendEmail(mail);
   } catch (e) {
-    console.log(e);
-    return next(
-      new ServerError('Unfortunately we could not send you an email!')
-    );
+    return next(new ServerError(MAIL_DELIVERY_FAIL_ERROR_MESSAGE));
   }
 
   res.json({ verificationCode });
-});
-
-// SYSTEM ROUTE HANDLERS
-// ONLY ACCESSIBLE TO ADMIN AND ADMIN PERMITTED ACCOUNTS
-
-// AGENT FUCTIONS
-export const systemSignIn = catchAsyncErrors(async (req, res, next) => {
-  const { email, password } = req.body;
-  const systemRoles = ['admin', 'sub-admin', 'agent'];
-  // find account
-  const account = await Account.findOne({
-    email,
-    role: { $in: systemRoles },
-  });
-
-  if (!account) {
-    // account does not exist err
-    return next(new ServerError('Account not found', 401));
-  }
-
-  // verify password
-  const isPasswordValid = await account.validatePassword(password);
-
-  if (!isPasswordValid) {
-    return next(new ServerError('Invalid password', 401));
-  }
-
-  objectAssign({ ip: req.ip, signedIn: Date.now() }, account);
-
-  // store token
-  const token = generateJwt(account.id, '1d');
-
-  account.tokens.push(token);
-
-  await account.save();
-
-  // setCookie(res, 'Auth-Token', token);
-
-  res.setHeader('auth_token', token);
-
-  res.json(account);
-});
-
-// ADMIN ONLY FUNCTIONS
-export const systemAdminCreateAccount = catchAsyncErrors(
-  async (req, res, next) => {
-    // don't allow admin accounts creations
-    if (req.body.role === 'admin') {
-      return next(
-        new ServerError(
-          'You do not have permission to perform these actions',
-          403
-        )
-      );
-    }
-
-    const account = new Account(req.body);
-
-    const { firstname, lastname } = account;
-
-    // generate email
-    account.email = generateAccountEmail(firstname, lastname);
-
-    // generate default for account
-    account.password = generateDfPassword(firstname, lastname);
-    // set these accounts as verified (unnecessary anyways)
-    account.verified = true;
-    // save account
-    await account.save();
-
-    res.status(201).json(account);
-  }
-);
-
-export const systemAdminAccountUpdate = catchAsyncErrors(
-  async (req, res, next) => {
-    const { firstname, lastname, contacts } = req.body;
-    const account = await Account.findById(req.params.accountId);
-    // if account does not exist send err
-    if (!account) {
-      return next(new ServerError('Account not found', 401));
-    }
-    // update properties
-    objectAssign({ firstname, lastname }, account);
-
-    await account.save();
-
-    res.json(account);
-  }
-);
-
-export const systemAdminRemoveAccount = catchAsyncErrors(
-  async (req, res, next) => {
-    const account = await Account.findById(req.params.accountId);
-
-    if (!account) return next(new ServerError('Account not found', 404));
-
-    if (
-      account.role === 'admin' ||
-      (req.account.role === 'sub-admin' &&
-        account.role === 'sub-admin' &&
-        !account._id.equals(req.account.id))
-    )
-      return next(
-        new ServerError("You're not allowed to perform these actions", 404)
-      );
-    // delete account
-    await Account.deleteOne({ _id: req.params.accountId });
-    // send response
-    res.status(204).json();
-  }
-);
-
-export const systemAdminPasswordChange = catchAsyncErrors(
-  async (req, res, next) => {
-    const account = await Account.findOne({
-      _id: req.params.accountId,
-      role: { $in: ['admin', 'sub-admin', 'agent'] },
-    });
-    // if account does not exist send err
-    if (!account) {
-      return next(new ServerError('Account not found', 401));
-    }
-
-    // if (account.role === 'admin'account._id.equals(req.account.id)) {
-
-    // }
-    // reset password to default and force account to update password
-    account.password = generateDfPassword(account.firstname, account.lastname);
-
-    await account.save();
-
-    res.json();
-  }
-);
-
-export const systemGetAccounts = catchAsyncErrors(async (req, res, next) => {
-  const accounts = await Account.find();
-  res.json(accounts);
 });

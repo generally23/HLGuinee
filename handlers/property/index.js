@@ -1,6 +1,6 @@
-import { ServerError, catchAsyncErrors } from './errors';
-import Property from '../schemas/property/index';
-import { removeFroms3 } from '../s3';
+import { ServerError, catchAsyncErrors } from '../errors';
+import Property from '../../schemas/property/index';
+import { removeFroms3 } from '../../s3';
 import {
   buildFilterStage,
   buildPipeline,
@@ -12,11 +12,17 @@ import {
   ownerLookupStage,
   preProcessImage,
   uploadPropertyImages,
-} from '../utils';
+} from '../../utils';
+import {
+  LOCATION_INVALID_ERROR_MESSAGE,
+  MAX_IMAGE_ALLOWED_ERROR_MESSAGE,
+  NO_LOCATION_ERROR_MESSAGE,
+  PROPERTY_NOTFOUND_ERROR_MESSAGE,
+} from './error_messages';
+import { NOT_PERMITTED_ERROR_MESSAGE } from '../error_messages';
 
 export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
-  const { north_east_bounds } = req.headers;
-  const { south_west_bounds } = req.headers;
+  const { north_east_bounds, south_west_bounds } = req.headers;
 
   // location of user fetching properties
   const userLocation = {
@@ -85,10 +91,7 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
   const { location } = req.body;
 
   // send an error if no location is passed
-  if (!location)
-    return next(
-      new ServerError('Cannot create a property without a location', 400)
-    );
+  if (!location) return next(new ServerError(NO_LOCATION_ERROR_MESSAGE, 400));
 
   // check to see if coordinates are in Guinea
   const fullyInGuinea = true; // await insideGuinea(location.coordinates);
@@ -96,9 +99,7 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
   console.log('In Guinea ?: ', fullyInGuinea);
 
   if (!fullyInGuinea)
-    return next(
-      new ServerError('Cannot create a property outside of Guinea', 400)
-    );
+    return next(new ServerError(LOCATION_INVALID_ERROR_MESSAGE, 400));
 
   // create new property
   const property = new Property(req.body);
@@ -129,9 +130,7 @@ export const fetchProperty = catchAsyncErrors(async (req, res, next) => {
   );
   // send an error if property does not exist
   if (!property) {
-    return next(
-      new ServerError('This property does not exist on our server', 404)
-    );
+    return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
   }
   // send property
   res.json(property);
@@ -149,18 +148,11 @@ export const updateProperty = catchAsyncErrors(async (req, res, next) => {
 
   if (!property) {
     // error
-    return next(
-      new ServerError('This property does not exist on our server', 404)
-    );
+    return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
   }
 
   if (!property.ownerId.equals(req.account.id)) {
-    return next(
-      new ServerError(
-        'You do not have enough credentials to perform this action',
-        404
-      )
-    );
+    return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
   }
 
   objectAssign(req.body, property, { mode: 'nostrict' });
@@ -176,9 +168,7 @@ export const removeProperty = catchAsyncErrors(async (req, res, next) => {
 
   // send error if property doesn't exist
   if (!property) {
-    return next(
-      new ServerError('This property does not exist on our server', 404)
-    );
+    return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
   }
 
   // only property owner and admin allowed accounts can delete
@@ -192,12 +182,7 @@ export const removeProperty = catchAsyncErrors(async (req, res, next) => {
   console.log('Allowed: ', allowedAccounts.includes(req.account.role));
 
   if (!sameAccount || (!sameAccount && !isAllowed)) {
-    return next(
-      new ServerError(
-        'You do not have enough credentials to perform this action',
-        403
-      )
-    );
+    return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
   }
 
   // delete all images of property from s3
@@ -223,9 +208,7 @@ export const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
 
   // send an error if property is not found
   if (!property) {
-    return next(
-      new ServerError('This property does not exist on our server', 404)
-    );
+    return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
   }
 
   // how many images are stored for this property
@@ -240,12 +223,7 @@ export const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
     propertyImagesLength >= maxImagesLength ||
     propertyImagesLength + uploadedImages.length > maxImagesLength
   ) {
-    return next(
-      new ServerError(
-        `A property cannot have more than ${maxImagesLength} images`,
-        400
-      )
-    );
+    return next(new ServerError(MAX_IMAGE_ALLOWED_ERROR_MESSAGE, 400));
   }
 
   /* 
@@ -274,17 +252,13 @@ export const removePropertyImages = catchAsyncErrors(async (req, res, next) => {
 
   // send an error if property is not found
   if (!property) {
-    return next(
-      new ServerError('This property does not exist on our server', 404)
-    );
+    return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
   }
 
   // allow only owner and admin to delete image
 
   if (!property.ownerId.equals(account.id)) {
-    return next(
-      new ServerError('You are not allowed to perform this action', 403)
-    );
+    return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
   }
 
   // imageNames

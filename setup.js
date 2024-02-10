@@ -61,6 +61,9 @@ export const connectToDb = async () => {
   } catch (error) {
     console.log('Failed db connection');
     console.log(error);
+
+    // we can't do anything without db access, shutdown server
+    process.exit();
   }
 };
 
@@ -80,9 +83,11 @@ export const setupExpressMiddleware = server => {
 
   // setup cors
   // server.use(cors());
+
   server.use(
     cors({
-      origin: 'http://localhost:3000',
+      origin: 'http://192.168.1.196:3000',
+      // origin: 'http://localhost:3000',
       credentials: true,
     })
   );
@@ -130,9 +135,13 @@ export const listen = async (
 ) => {
   try {
     await server.listen(port, console.log);
+
     console.log('listening on port 9090');
+
     console.clear();
   } catch (error) {
+    // we must able to listen for connection on this port shutdown server
     console.log('failing to listen on port 9090');
+    process.exit();
   }
 };

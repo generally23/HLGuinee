@@ -12,13 +12,20 @@ export const locationSchema = new Schema({
   },
   coordinates: {
     type: [Number],
-    required: [true, 'location coordinates are required'],
+    required: [true, 'Un bien doit avoir des coordonées GPS'],
     validator: {
       validate(value) {
+        const [longitude, latitude] = value;
+
         // values must be 2 Numbers
-        return value.length === 2;
+        return (
+          value.length === 2 &&
+          typeof longitude === 'number' &&
+          typeof latitude === 'number'
+        );
       },
-      message: 'Coordinates need a Longitude and a Latitude',
+      message:
+        'Les coordonnées GPS doivent avoir une longitude et une latitude',
     },
   },
 });

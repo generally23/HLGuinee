@@ -18,7 +18,7 @@ const propertySchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      required: [true, 'A property must be of type land or house'],
+      required: [true, 'Un bien doit être soit une maison où un terrain'],
       enum: ['house', 'land'],
       lowercase: true,
     },
@@ -26,7 +26,7 @@ const propertySchema = new mongoose.Schema(
     purpose: {
       type: String,
       enum: ['rent', 'sell'],
-      required: [true, 'A house must have a purpose'],
+      required: [true, 'Un motif du bien est réquis, soit a vendre où a louer'],
       validate: {
         validator(value) {
           // property can't be land and be rented for now
@@ -48,13 +48,13 @@ const propertySchema = new mongoose.Schema(
     },
 
     ownerId: {
-      required: [true, 'A property must have an owner'],
+      required: [true, 'Un bien doit avoir un propriétaire'],
       type: mongoose.Schema.Types.ObjectId,
     },
 
     location: {
       type: locationSchema,
-      required: [true, 'A property must have gps coordinates'],
+      required: [true, 'Un bien doit avoir une localisation GPS'],
     },
 
     // documented: {
@@ -63,7 +63,7 @@ const propertySchema = new mongoose.Schema(
 
     address: {
       type: String,
-      required: [true, 'A property must have an address'],
+      required: [true, 'Un bien doit avoir un quartier'],
       lowercase: true,
     },
 
@@ -71,7 +71,7 @@ const propertySchema = new mongoose.Schema(
 
     area: {
       type: Number,
-      required: [true, 'Area is required'],
+      required: [true, 'Surface est réquise'],
     },
 
     areaBuilt: {
@@ -80,7 +80,7 @@ const propertySchema = new mongoose.Schema(
         function () {
           this.type === 'house';
         },
-        'Area built is required',
+        'Surface Batie est réquise',
       ],
       default: function () {
         // if property is a house and user did not set this property set to area
@@ -88,29 +88,31 @@ const propertySchema = new mongoose.Schema(
       },
       validate: {
         validator,
-        message: 'area built is only for a house',
+        message: 'Surface Batie est permis que pour les maisons',
       },
     },
 
     areaUnit: {
       type: String,
-      required: [true, 'Area unit is required'],
+      required: [true, 'Unité de surface réquise'],
       default: 'm²',
     },
 
     title: {
       type: String,
-      max: [60, 'A title cannot exceed 60 characters'],
-      required: [true, 'A property needs a title'],
+      max: [60, 'Un titre ne peut pas être plus de 60 lettres'],
+      required: [true, `Un bien a besoin d'un titre`],
     },
 
     description: {
       type: String,
-      max: [1500, 'The description cannot be longer than 512 characters'],
+      required: ['Une description est réquise'],
+      max: [1500, 'Une description ne peut pas être plus de 512 lettres'],
     },
 
     status: {
       type: String,
+      required: [true, 'Status est réquis'],
       enum: ['unlisted', 'listed', 'pending', 'sold', 'rented'],
       default: 'unlisted',
     },
@@ -121,11 +123,11 @@ const propertySchema = new mongoose.Schema(
         function () {
           return this.type === 'house';
         },
-        'A house must have rooms',
+        'Chambres est réquise',
       ],
       validate: {
         validator,
-        message: 'Rooms are only for a house',
+        message: 'Chambres est permis que pour les maisons',
       },
     },
 
@@ -135,11 +137,11 @@ const propertySchema = new mongoose.Schema(
         function () {
           return this.type === 'house';
         },
-        'bathrooms is required',
+        'Douches est réquis is required',
       ],
       validate: {
         validator,
-        message: 'Bathrooms are only for a house',
+        message: 'Douches est permis que pour les maisons',
       },
     },
 
@@ -152,11 +154,11 @@ const propertySchema = new mongoose.Schema(
         function () {
           return this.type === 'house';
         },
-        'kitchens is required',
+        'Cuisine est réquise',
       ],
       validate: {
         validator,
-        message: 'kitchens is only for houses',
+        message: 'Cuisine est permis que pour les maisons',
       },
     },
 
@@ -169,11 +171,11 @@ const propertySchema = new mongoose.Schema(
         function () {
           return this.type === 'house';
         },
-        'garages is required',
+        'Garages est réquis',
       ],
       validate: {
         validator,
-        message: 'Garages are only for a house',
+        message: 'Les garages sont permis que pour les maisons',
       },
     },
 
@@ -190,7 +192,7 @@ const propertySchema = new mongoose.Schema(
       ],
       validate: {
         validator,
-        message: 'Dining rooms are only for a house',
+        message: 'Les sale à manger sont permis que pour les maisons',
       },
     },
 
@@ -207,24 +209,24 @@ const propertySchema = new mongoose.Schema(
       ],
       validate: {
         validator,
-        message: 'Living rooms are only for a house',
+        message: 'Les salons sont permis que pour les maisons',
       },
     },
 
     yearBuilt: {
       type: Number,
       // minium property built year
-      min: [1800, 'A property built year must be from year 1800'],
+      min: [1800, 'Un bien built year must be from year 1800'],
       // don't allow property buil year to be in the future
       max: [
         new Date().getFullYear(),
-        `A property built year can't be in the future`,
+        'Un bien ne peut pas etre construit dans le future',
       ],
       required: [
         function () {
           return this.type === 'house';
         },
-        'A house property must have a year built',
+        'Une maison doit avoir une année de construction',
       ],
     },
 
@@ -234,7 +236,7 @@ const propertySchema = new mongoose.Schema(
       default: function () {
         return this.type === 'house' ? false : undefined;
       },
-      required: [true, 'Fenced is required'],
+      required: [true, 'Cloture est réquise'],
     },
 
     pools: {
@@ -246,23 +248,16 @@ const propertySchema = new mongoose.Schema(
         function () {
           return this.type === 'house';
         },
-        'pools is required',
       ],
       validate: {
         validator,
-        message: 'Pool is only for a house',
+        message: 'Seul une maison possède de piscine',
       },
     },
     tags: [String],
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
-
-// indexes
-
-// propertySchema.index({
-//   location: '2dsphere',
-// });
 
 // Index all sortable fields
 
@@ -296,10 +291,5 @@ propertySchema.methods.toJSON = function () {
 };
 
 const Property = mongoose.model('Property', propertySchema);
-
-Property.on('index', e => {
-  console.log(e);
-});
-// EXPORTS
 
 export default Property;
