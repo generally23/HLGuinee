@@ -7,6 +7,7 @@ const maintenanceServer = express();
 
 // setup express middlewares
 setupExpressMiddleware(server);
+
 // connect to mongodb
 connectToDb();
 

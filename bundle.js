@@ -14,11 +14,11 @@ var clientS3 = require('@aws-sdk/client-s3');
 var uniqid = require('uniqid');
 var jsonwebtoken = require('jsonwebtoken');
 var crypto = require('crypto');
-var nodemailer = require('nodemailer');
 require('fs/promises');
 require('@turf/turf');
 var argon = require('argon2');
 var emailValidator = require('email-validator');
+var nodemailer = require('nodemailer');
 var dotenv = require('dotenv');
 var expressQueryParser = require('express-query-parser');
 
@@ -270,20 +270,32 @@ const convertToWebp = async (file, quality = 100) => {
 const uploadAvatar = async (file, account) => {
   if (file && account) {
     // change avatar name
-    file.originalname = `avatar-${account.id}`;
+    file.originalname = `avatar-${account.id}-${uniqid()}`;
 
     // convert original file to webp
     const webpAvatar = await convertToWebp(file);
 
     // make copies of account avatar/profile in the given dimensions
-    const copyOutput = await createFileCopies(webpAvatar, [250, 500, 800]);
+    // const copyOutput = await createFileCopies(webpAvatar, [250, 500, 800]);
+
+    webpAvatar.buffer = await sharp(webpAvatar.buffer).resize(500).toBuffer();
+
     // only save the copies not the original
-    const avatarFiles = copyOutput.copies;
+    // const avatarFiles = copyOutput.copies;
 
     // upload files to AWS S3
-    await uploadToS3(avatarFiles);
+    // await uploadToS3(avatarFiles);
 
-    account.avatarNames = avatarFiles.map(avatar => avatar.originalname);
+    await uploadToS3([webpAvatar]);
+
+    // const firstAvatar = avatarFiles[0];
+
+    // account.avatarUrl = `${process.env.CLOUDFRONT_URL}/${firstAvatar.originalname}`;
+
+    account.avatarUrl = `${process.env.CLOUDFRONT_URL}/${webpAvatar.originalname}`;
+
+    // update user with new image urls
+    // account.avatarNames = avatarFiles.map(avatar => avatar.originalname);
 
     await account.save();
   }
@@ -336,55 +348,6 @@ const uploadPropertyImages = async (images, property) => {
     // persist to db
     await property.save();
   }
-};
-
-// export const sendEmail2 = content => {
-//   const transporter = nodemailer.createTransport({
-//     host: 'smtp-relay.brevo.com',
-//     port: 587,
-//     auth: {
-//       user: 'rallygene0@gmail.com',
-//       pass: 'FvtRrDY5WV9hTPJn',
-//     },
-//   });
-
-//   return transporter.sendMail(content);
-// };
-
-const sendEmail = content => {
-  let attempts = 0;
-  let maxAttempts = 3;
-  let timeout = 0;
-
-  const transporter = nodemailer.createTransport({
-    host: 'smtp-relay.brevo.com',
-    port: 587,
-    auth: {
-      user: 'rallygene0@gmail.com',
-      pass: 'FvtRrDY5WV9hTPJn',
-    },
-  });
-
-  return new Promise((resolve, reject) => {
-    const sender = async () => {
-      attempts++;
-
-      console.log('I am sending the email ', attempts);
-
-      if (attempts >= maxAttempts) return reject('failed to send mail');
-
-      try {
-        await transporter.sendMail(content);
-
-        resolve('sent');
-      } catch (error) {
-        // timeout += 1000;
-        setTimeout(sender, timeout);
-      }
-    };
-
-    return sender();
-  });
 };
 
 const hashToken = raw => {
@@ -1273,7 +1236,6 @@ const accountSchema = new mongoose.Schema(
       minlength: [4, 'Prénom ne peut pas etre moins de 4 lettres'],
       maxlength: [15, 'Prénom ne peut pas etre plus de 15 lettres'],
       required: [true, 'Prénom est réquis'],
-      lowercase: true,
     },
 
     lastname: {
@@ -1281,7 +1243,6 @@ const accountSchema = new mongoose.Schema(
       minlength: [4, 'Nom ne peut pas etre moins de 2 lettres'],
       maxlength: [15, 'Nom ne peut pas etre plus de 10 lettres'],
       required: [true, 'Nom est réquis'],
-      lowercase: true,
     },
 
     email: {
@@ -1314,6 +1275,11 @@ const accountSchema = new mongoose.Schema(
     password: {
       type: String,
       required: [true, 'Mot de passe réquis'],
+    },
+
+    avatarUrl: {
+      type: String,
+      default: 'http://192.169.1.196:9090/assets/images/avatar.avif',
     },
 
     avatarNames: [String],
@@ -1360,9 +1326,6 @@ const accountSchema = new mongoose.Schema(
 );
 
 // virtuals
-accountSchema.virtual('avatarUrls').get(function () {
-  return this.avatarNames.map(name => `${process.env.CLOUDFRONT_URL}/${name}`);
-});
 
 /** HOOKS */
 
@@ -1590,6 +1553,61 @@ const VERFIFY_ACCOUNT_FAIL_ERROR_MESSAGE = `Malheureusement, nous n'avions pas p
 
 const MAIL_DELIVERY_FAIL_ERROR_MESSAGE = `Malheuresement notre service email n'a pas pu vous délivrer l'email`;
 
+const sendEmail = content => {
+  const { SMTP_HOSTNAME, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD } =
+    process.env;
+
+  const transporter = nodemailer.createTransport({
+    host: SMTP_HOSTNAME,
+    port: SMTP_PORT,
+    auth: {
+      user: SMTP_USERNAME,
+      pass: SMTP_PASSWORD,
+    },
+  });
+
+  return transporter.sendMail(content);
+};
+
+// export const sendEmail = content => {
+//   let attempts = 0;
+//   let maxAttempts = 3;
+//   let timeout = 0;
+
+//   const { SMTP_HOSTNAME, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD } =
+//     process.env;
+
+//   const transporter = nodemailer.createTransport({
+//     host: SMTP_HOSTNAME,
+//     port: SMTP_PORT,
+//     auth: {
+//       user: SMTP_USERNAME,
+//       pass: SMTP_PASSWORD,
+//     },
+//   });
+
+//   return new Promise((resolve, reject) => {
+//     const sender = async () => {
+//       attempts++;
+
+//       console.log('I am sending the email ', attempts);
+
+//       if (attempts >= maxAttempts) return reject('failed to send mail');
+
+//       try {
+//         await transporter.sendMail(content);
+
+//         resolve('sent');
+//       } catch (error) {
+//         timeout += 1000;
+//         setTimeout(sender, timeout);
+//       }
+//     };
+
+//     return sender();
+//   });
+// };
+
 // REGULAR USER HANDLERS
 const signup = catchAsyncErrors(async (req, res, next) => {
   // make sure this account does not exist before we create one
@@ -1737,7 +1755,7 @@ const getMyAccount = catchAsyncErrors(async (req, res, next) => {
 const updateMyAccount = catchAsyncErrors(async (req, res, next) => {
   const { account } = req;
 
-  const avatar = req.files ? req.files[0] : undefined;
+  const avatar = req.file;
 
   const { firstname, lastname } = req.body;
 
@@ -1745,10 +1763,16 @@ const updateMyAccount = catchAsyncErrors(async (req, res, next) => {
 
   await account.save();
 
-  // process and update avatar
-  await uploadAvatar(avatar, account);
-
+  // respond to user
   res.json(account);
+
+  // remove old avatars from s3
+  // const oldAvatarNames = account.avatarNames;
+
+  // await removeFroms3(account.);
+
+  // process and update avatar
+  uploadAvatar(avatar, account);
 });
 
 const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
@@ -1916,15 +1940,19 @@ const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
     to: account.email,
     subject: 'Verify Account Instructions ✔',
     text: verifyUrl,
+    body: 'testing',
   };
 
   try {
-    await sendEmail(mail);
+    const resp = await sendEmail(mail);
+
+    console.log(resp);
   } catch (e) {
+    console.log('error when sending email : ', e);
     return next(new ServerError(MAIL_DELIVERY_FAIL_ERROR_MESSAGE));
   }
 
-  res.json({ verificationCode });
+  res.json({ verificationCode, message: 'Email delivrer avec succès' });
 });
 
 // SYSTEM ROUTE HANDLERS
@@ -2070,7 +2098,7 @@ router$1
   .get(authenticate(), getMyAccount)
 
   // update my account
-  .patch(authenticate(), updateMyAccount)
+  .patch(authenticate(), uploader().single('avatar'), updateMyAccount)
 
   // remove my account
   .delete(authenticate(), deleteMyAccount);
@@ -2293,6 +2321,7 @@ express();
 
 // setup express middlewares
 setupExpressMiddleware(server);
+
 // connect to mongodb
 connectToDb();
 

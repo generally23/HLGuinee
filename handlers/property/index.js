@@ -1,6 +1,6 @@
 import { ServerError, catchAsyncErrors } from '../errors';
 import Property from '../../schemas/property/index';
-import { removeFroms3 } from '../../s3';
+import { removeFroms3 } from '../../services/AWS_S3/index';
 import {
   buildFilterStage,
   buildPipeline,

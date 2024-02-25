@@ -13,7 +13,6 @@ const accountSchema = new mongoose.Schema(
       minlength: [4, 'Prénom ne peut pas etre moins de 4 lettres'],
       maxlength: [15, 'Prénom ne peut pas etre plus de 15 lettres'],
       required: [true, 'Prénom est réquis'],
-      lowercase: true,
     },
 
     lastname: {
@@ -21,7 +20,6 @@ const accountSchema = new mongoose.Schema(
       minlength: [4, 'Nom ne peut pas etre moins de 2 lettres'],
       maxlength: [15, 'Nom ne peut pas etre plus de 10 lettres'],
       required: [true, 'Nom est réquis'],
-      lowercase: true,
     },
 
     email: {
@@ -54,6 +52,11 @@ const accountSchema = new mongoose.Schema(
     password: {
       type: String,
       required: [true, 'Mot de passe réquis'],
+    },
+
+    avatarUrl: {
+      type: String,
+      default: 'http://192.169.1.196:9090/assets/images/avatar.avif',
     },
 
     avatarNames: [String],
@@ -100,9 +103,6 @@ const accountSchema = new mongoose.Schema(
 );
 
 // virtuals
-accountSchema.virtual('avatarUrls').get(function () {
-  return this.avatarNames.map(name => `${process.env.CLOUDFRONT_URL}/${name}`);
-});
 
 /** HOOKS */
 

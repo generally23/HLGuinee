@@ -1,11 +1,10 @@
 import multer from 'multer';
 import sharp from 'sharp';
-import { uploadToS3 } from './s3';
+import { uploadToS3 } from './services/AWS_S3/index';
 import { ServerError } from './handlers/errors';
 import uniqid from 'uniqid';
 import { sign } from 'jsonwebtoken';
 import crypto from 'crypto';
-import nodemailer from 'nodemailer';
 import fs from 'fs/promises';
 import path from 'path';
 import { booleanPointInPolygon, point, polygon } from '@turf/turf';
@@ -119,20 +118,32 @@ export const convertToWebp = async (file, quality = 100) => {
 export const uploadAvatar = async (file, account) => {
   if (file && account) {
     // change avatar name
-    file.originalname = `avatar-${account.id}`;
+    file.originalname = `avatar-${account.id}-${uniqid()}`;
 
     // convert original file to webp
     const webpAvatar = await convertToWebp(file);
 
     // make copies of account avatar/profile in the given dimensions
-    const copyOutput = await createFileCopies(webpAvatar, [250, 500, 800]);
+    // const copyOutput = await createFileCopies(webpAvatar, [250, 500, 800]);
+
+    webpAvatar.buffer = await sharp(webpAvatar.buffer).resize(500).toBuffer();
+
     // only save the copies not the original
-    const avatarFiles = copyOutput.copies;
+    // const avatarFiles = copyOutput.copies;
 
     // upload files to AWS S3
-    await uploadToS3(avatarFiles);
+    // await uploadToS3(avatarFiles);
 
-    account.avatarNames = avatarFiles.map(avatar => avatar.originalname);
+    await uploadToS3([webpAvatar]);
+
+    // const firstAvatar = avatarFiles[0];
+
+    // account.avatarUrl = `${process.env.CLOUDFRONT_URL}/${firstAvatar.originalname}`;
+
+    account.avatarUrl = `${process.env.CLOUDFRONT_URL}/${webpAvatar.originalname}`;
+
+    // update user with new image urls
+    // account.avatarNames = avatarFiles.map(avatar => avatar.originalname);
 
     await account.save();
   }
@@ -185,55 +196,6 @@ export const uploadPropertyImages = async (images, property) => {
     // persist to db
     await property.save();
   }
-};
-
-// export const sendEmail2 = content => {
-//   const transporter = nodemailer.createTransport({
-//     host: 'smtp-relay.brevo.com',
-//     port: 587,
-//     auth: {
-//       user: 'rallygene0@gmail.com',
-//       pass: 'FvtRrDY5WV9hTPJn',
-//     },
-//   });
-
-//   return transporter.sendMail(content);
-// };
-
-export const sendEmail = content => {
-  let attempts = 0;
-  let maxAttempts = 3;
-  let timeout = 0;
-
-  const transporter = nodemailer.createTransport({
-    host: 'smtp-relay.brevo.com',
-    port: 587,
-    auth: {
-      user: 'rallygene0@gmail.com',
-      pass: 'FvtRrDY5WV9hTPJn',
-    },
-  });
-
-  return new Promise((resolve, reject) => {
-    const sender = async () => {
-      attempts++;
-
-      console.log('I am sending the email ', attempts);
-
-      if (attempts >= maxAttempts) return reject('failed to send mail');
-
-      try {
-        await transporter.sendMail(content);
-
-        resolve('sent');
-      } catch (error) {
-        // timeout += 1000;
-        setTimeout(sender, timeout);
-      }
-    };
-
-    return sender();
-  });
 };
 
 export const hashToken = raw => {

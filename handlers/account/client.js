@@ -4,12 +4,11 @@ import {
   generateJwt,
   hashToken,
   objectAssign,
-  sendEmail,
   setCookie,
   uploadAvatar,
 } from '../../utils';
 import Property from '../../schemas/property/index';
-import { removeFroms3 } from '../../s3';
+import { removeFroms3 } from '../../services/AWS_S3/index';
 
 import {
   EXISTING_ACCOUNT_ERROR_MESSGE,
@@ -20,6 +19,7 @@ import {
   VERFIFY_ACCOUNT_FAIL_ERROR_MESSAGE,
   MAIL_DELIVERY_FAIL_ERROR_MESSAGE,
 } from './error_messages';
+import { sendEmail } from '../../services/email/index';
 
 // REGULAR USER HANDLERS
 export const signup = catchAsyncErrors(async (req, res, next) => {
@@ -168,7 +168,7 @@ export const getMyAccount = catchAsyncErrors(async (req, res, next) => {
 export const updateMyAccount = catchAsyncErrors(async (req, res, next) => {
   const { account } = req;
 
-  const avatar = req.files ? req.files[0] : undefined;
+  const avatar = req.file;
 
   const { firstname, lastname } = req.body;
 
@@ -176,10 +176,16 @@ export const updateMyAccount = catchAsyncErrors(async (req, res, next) => {
 
   await account.save();
 
-  // process and update avatar
-  await uploadAvatar(avatar, account, next);
-
+  // respond to user
   res.json(account);
+
+  // remove old avatars from s3
+  // const oldAvatarNames = account.avatarNames;
+
+  // await removeFroms3(account.);
+
+  // process and update avatar
+  uploadAvatar(avatar, account);
 });
 
 export const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
@@ -347,13 +353,17 @@ export const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
     to: account.email,
     subject: 'Verify Account Instructions ✔',
     text: verifyUrl,
+    body: 'testing',
   };
 
   try {
-    await sendEmail(mail);
+    const resp = await sendEmail(mail);
+
+    console.log(resp);
   } catch (e) {
+    console.log('error when sending email : ', e);
     return next(new ServerError(MAIL_DELIVERY_FAIL_ERROR_MESSAGE));
   }
 
-  res.json({ verificationCode });
+  res.json({ verificationCode, message: 'Email delivrer avec succès' });
 });

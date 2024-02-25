@@ -38,7 +38,7 @@ router
   .get(authenticate(), getMyAccount)
 
   // update my account
-  .patch(authenticate(), updateMyAccount)
+  .patch(authenticate(), uploader().single('avatar'), updateMyAccount)
 
   // remove my account
   .delete(authenticate(), deleteMyAccount);
