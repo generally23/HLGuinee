@@ -7,15 +7,24 @@ var helmet = require('helmet');
 var cors = require('cors');
 var compress = require('compression');
 var cookieParser = require('cookie-parser');
+var mongoSanitize = require('express-mongo-sanitize');
 var multer = require('multer');
 var sharp = require('sharp');
 var clientS3 = require('@aws-sdk/client-s3');
-var uid = require('uniqid');
+var uniqid = require('uniqid');
 var jsonwebtoken = require('jsonwebtoken');
 var crypto = require('crypto');
+require('fs/promises');
+require('@turf/turf');
 var argon = require('argon2');
 var emailValidator = require('email-validator');
+var nodemailer = require('nodemailer');
 var dotenv = require('dotenv');
+var expressQueryParser = require('express-query-parser');
+
+const router$3 = express.Router();
+
+router$3.get('/', (req, res) => res.send('Welcome to my webserver'));
 
 const createS3Instance = () => {
   // AWS CONFIGURATION
@@ -57,7 +66,6 @@ const removeFroms3 = async (fileNames = []) => {
   const s3Instance = createS3Instance();
   const bucketName = process.env.AWS_BUCKET_NAME;
 
-  console.log(fileNames);
   // Delete each given filename from the s3 Bucket
   for (let filename of fileNames) {
     // command parameters
@@ -72,7 +80,7 @@ const removeFroms3 = async (fileNames = []) => {
   }
 };
 
-let ServerError$1 = class ServerError extends Error {
+class ServerError extends Error {
   constructor(
     message = 'Internal server error',
     statusCode = 500,
@@ -84,25 +92,28 @@ let ServerError$1 = class ServerError extends Error {
     this.details = details;
     Error.captureStackTrace(this, this.constructor);
   }
-};
+}
 
 const unroutable = (req, res, next) => {
-  next(new ServerError$1(`The route ${req.originalUrl} is not found`, 404));
+  next(new ServerError(`The route ${req.originalUrl} is not found`, 404));
 };
 
-const catchAsyncErrors = (f) => {
+const catchAsyncErrors = f => {
   return (req, res, next) => f(req, res, next).catch(next);
 };
 
 const globalErrorHandler = (err, req, res, next) => {
-  console.error('The Error Happened Here!!! : ', err);
+  console.error('The Error Happened Here!!! : ', err, err.operational);
 
   // const { ENVIRONMENT = 'dev' } = process.env;
   const { ENVIRONMENT = 'dev' } = process.env;
 
+  console.log(ENVIRONMENT);
+
   if (ENVIRONMENT === 'dev') {
     // known error
     if (err.operational) {
+      console.log('sendin error rn');
       res.status(err.statusCode).json({ ...err, message: err.message });
     } else {
       // send error
@@ -116,12 +127,12 @@ const globalErrorHandler = (err, req, res, next) => {
       const { keyValue } = error;
       let message = '';
       for (let key in keyValue) message += `wrong ${key}! `;
-      error = new ServerError$1(message, 400);
+      error = new ServerError(message, 400);
     }
 
     // cast errors
     if (err.name === 'CastError') {
-      error = new ServerError$1(`Invalid ${error.path}: ${error.value}`, 400);
+      error = new ServerError(`Invalid ${error.path}: ${error.value}`, 400);
     }
 
     // validation errors
@@ -129,15 +140,15 @@ const globalErrorHandler = (err, req, res, next) => {
       const details = {};
 
       for (let key in error.errors) {
-        details[key] = error.errors[key].properties.message;
+        details[key] = error?.errors[key]?.properties?.message;
       }
 
-      error = new ServerError$1('Validation error', 400, details);
+      error = new ServerError('Validation error', 400, details);
     }
 
     // multer errors
     if (err instanceof multer.MulterError) {
-      error = new ServerError$1(err.message, 400);
+      error = new ServerError(err.message, 400);
     }
 
     if (error.operational) {
@@ -150,30 +161,33 @@ const globalErrorHandler = (err, req, res, next) => {
   }
 };
 
-const objectAssign = (source, target) => {
-  if (!source || !target) {
-    return;
-  }
+const objectAssign = (source, target, options = { mode: '' }) => {
+  if (!source || !target) return;
+
   for (let key in source) {
-    if (source[key]) target[key] = source[key];
+    //  non strict mode just assign values even falsy ones
+    if (options.mode === 'nostrict') target[key] = source[key];
+    // use strict mode
+    else {
+      if (source[key]) target[key] = source[key];
+    }
   }
 };
 
 // delete properties from a source object
-const deleteProps = (src, ...props) => {
-  props.forEach((prop) => delete src[prop]);
-};
+const deleteProps = (src, ...props) =>
+  props.forEach(prop => delete src[prop]);
 
 const generateJwt = (
   id,
   expiresIn = process.env.JWT_EXPIRATION_TIME || '30d'
 ) => {
-  return jsonwebtoken.sign({ id }, process.env.JWT_SECRET_KEY || 'secret', {
+  return jsonwebtoken.sign({ id }, process.env.JWT_SECRET || 'secret', {
     expiresIn,
   });
 };
 
-const uploader = (limits) => {
+const uploader = limits => {
   limits = {
     fileSize: parseInt(process.env.MAX_IMAGE_SIZE) || 5000000,
     files: 1,
@@ -182,6 +196,7 @@ const uploader = (limits) => {
   const storage = multer.memoryStorage();
   // filter files to only accept images
   const fileFilter = (req, file, cb) => {
+    console.log('file', file);
     const regex = /.+\/(jpg|jpeg|png|webp)$/;
 
     if (!file.mimetype.match(regex)) {
@@ -195,21 +210,26 @@ const uploader = (limits) => {
   return multer({ storage, limits, fileFilter });
 };
 
-const isFullHd = async (file) => {
+const isFullHd = async file => {
   if (!file) return;
   // get image dimensions
   const { width, height } = await sharp(file.buffer).metadata();
+
   // if width & height >= FHD image passes test
-  if (width >= 1920 && height >= 1080) return true;
-  // image fails test
-  return false;
+  // if (width >= 1920 && height >= 1080) return true;
+
+  // if width or height does is not FHD+ test fails
+  if (width < 1920 || height < 1080) return { passed: false };
+
+  // test passes
+  return { passed: true, width, height };
 };
 
 const createFileCopies = async (source, dimensions = []) => {
   if (!source) return;
 
   const copies = [];
-  const all = [source];
+  const all = [];
 
   for (let dimension of dimensions) {
     const copy = { ...source };
@@ -224,6 +244,8 @@ const createFileCopies = async (source, dimensions = []) => {
     all.push(copy);
   }
 
+  all.push(source);
+
   return { source, copies, all };
 };
 
@@ -235,10 +257,8 @@ const convertToWebp = async (file, quality = 100) => {
     // convert to webp
     const converted = await sharp(file.buffer).webp({ quality }).toBuffer();
 
-    console.log('file sizes: ', file.size, converted.byteLength);
     // only save converted if it's size is less than original file
     if (converted.byteLength < file.size) {
-      console.log('converted');
       file.buffer = converted;
       file.mimetype = 'images/webp';
     }
@@ -247,44 +267,55 @@ const convertToWebp = async (file, quality = 100) => {
   return file;
 };
 
-const uploadAvatar = async (file, account, next) => {
+const uploadAvatar = async (file, account) => {
   if (file && account) {
     // change avatar name
-    file.originalname = `avatar-${account.id}`;
-    // check if image is at least 1920x1080(FHD)
-    const isAccepted = isFullHd(file);
+    file.originalname = `avatar-${account.id}-${uniqid()}`;
 
-    // send error if image is low quality < FHD
-    if (!isAccepted) {
-      return next(new ServerError$1('Please upload a high quality image', 400));
-    }
     // convert original file to webp
     const webpAvatar = await convertToWebp(file);
 
     // make copies of account avatar/profile in the given dimensions
-    const copyOutput = await createFileCopies(webpAvatar, [200, 400, 800]);
-    const avatarFiles = copyOutput.all;
+    // const copyOutput = await createFileCopies(webpAvatar, [250, 500, 800]);
+
+    webpAvatar.buffer = await sharp(webpAvatar.buffer).resize(500).toBuffer();
+
+    // only save the copies not the original
+    // const avatarFiles = copyOutput.copies;
 
     // upload files to AWS S3
-    await uploadToS3(avatarFiles);
+    // await uploadToS3(avatarFiles);
 
-    account.avatarNames = avatarFiles.map((avatar) => avatar.originalname);
+    await uploadToS3([webpAvatar]);
+
+    // const firstAvatar = avatarFiles[0];
+
+    // account.avatarUrl = `${process.env.CLOUDFRONT_URL}/${firstAvatar.originalname}`;
+
+    account.avatarUrl = `${process.env.CLOUDFRONT_URL}/${webpAvatar.originalname}`;
+
+    // update user with new image urls
+    // account.avatarNames = avatarFiles.map(avatar => avatar.originalname);
 
     await account.save();
   }
 };
 
-const uploadPropertyImages = async (images, property, next) => {
+const uploadPropertyImages = async (images, property) => {
   for (let image of images) {
     // rename property images
-    image.originalname = `property-img-${uid()}`;
+    image.originalname = `property-img-${uniqid()}`;
 
     // make sure images match our criterias
-    const isHighRes = await isFullHd(image);
+    const resolution = await isFullHd(image);
+
+    const isHighRes = resolution.passed;
+
+    console.log(isHighRes);
 
     // send error if images are not clear (hd)
     if (!isHighRes) {
-      return next(new ServerError$1('Please upload high resolution images', 400));
+      throw new ServerError('Please upload high resolution images', 400);
     }
 
     // convert property image to webp to optimize images for web use
@@ -298,6 +329,9 @@ const uploadPropertyImages = async (images, property, next) => {
     // create smaller image versions from original image uploaded by client
     const copyOutput = await createFileCopies(webpImage, dimensions);
 
+    // rename original image to add width for responsive images
+    webpImage.originalname = `${image.originalname}-${resolution.width}`;
+
     // original image + smaller versions of image
     const imageAndCopies = copyOutput.all;
 
@@ -307,7 +341,7 @@ const uploadPropertyImages = async (images, property, next) => {
     // save image and its different versions info to db
     const imageObject = {
       sourceName: webpImage.originalname,
-      names: imageAndCopies.map((img) => img.originalname),
+      names: imageAndCopies.map(img => img.originalname),
     };
     // add imageObject to imageNames list
     property.imagesNames.push(imageObject);
@@ -316,99 +350,13 @@ const uploadPropertyImages = async (images, property, next) => {
   }
 };
 
-// create pages array out of a number of pages
-const createPages = (numPages) => {
-  let firstPage = 1;
-  const pages = [];
-  for (let i = firstPage; i <= numPages; i++) {
-    pages.push(i);
-  }
-  return pages;
-};
-
-const paginateModel = async (
-  Model,
-  searchObject = {},
-  filterObject = {},
-  sortStr = '',
-  pagingInfo = { page: 1, limit: 15 },
-  // all these must be popolated
-  ...populates
-) => {
-  console.log(searchObject, filterObject, sortStr, pagingInfo);
-  // variables
-  let docs;
-  let docsCount;
-  let query;
-  // find documents length
-  const searchObjectLength = Object.values(searchObject).length;
-
-  console.log(searchObjectLength);
-
-  if (searchObjectLength) {
-    query = Model.countDocuments(searchObject).find(filterObject);
-    docsCount = await query.countDocuments();
-  } else docsCount = await Model.countDocuments(filterObject);
-
-  // get paging info
-  let page = parseInt(pagingInfo.page);
-  let limit = parseInt(pagingInfo.limit);
-
-  // sanitize user input
-  if (isNaN(page) || page < 1) page = 1;
-
-  if (isNaN(limit) || limit < 15) limit = 15;
-
-  let firstPage = 1;
-  let pages = Math.ceil(docsCount / limit);
-  let lastPage = pages;
-
-  const prevPage = firstPage < page ? page - 1 : null;
-  const nextPage = lastPage > page ? page + 1 : null;
-
-  const read = page - firstPage;
-  const toread = lastPage - page;
-
-  const skip = (page - 1) * limit;
-
-  if (searchObjectLength) {
-    query = Model.find(searchObject)
-      .find(filterObject)
-      .sort(sortStr)
-      .skip(skip)
-      .limit(limit);
-
-    populates.forEach((population) => query.populate(population));
-
-    docs = await query;
-  } else {
-    query = Model.find(filterObject).sort(sortStr).skip(skip).limit(limit);
-
-    populates.forEach((population) => query.populate(population));
-
-    docs = await query.exec();
-  }
-
-  const docsLength = docs.length;
-
-  return {
-    page,
-    pageCount: pages,
-    pages: createPages(pages),
-    nextPage,
-    prevPage,
-    read,
-    toread,
-    docs,
-    totalResults: docsCount,
-    firstPage,
-    lastPage,
-    docsLength,
-  };
-};
-
-const hashToken = (raw) => {
+const hashToken = raw => {
   return crypto.createHash('sha256').update(raw).digest('hex');
+};
+
+const setCookie = (res, name, value, options = {}) => {
+  options = { maxAge: 30 * 24 * 60 * 60 * 1000, httpOnly: true, ...options };
+  res.cookie(name, value, options);
 };
 
 const generateAccountEmail = (fn = '', ln = '') => {
@@ -424,120 +372,561 @@ const generateDfPassword = (fn = '', ln = '') => {
   return `PASS-${fn.slice(0, 2)}${ln.slice(0, 2)}`;
 };
 
-// SCHEMA
-const offerSchema = new mongoose.Schema(
+const formatSrset = srcSet => {
+  srcSet = !srcSet ? [] : srcSet;
+
+  let formatted = '';
+
+  const { length } = srcSet;
+
+  for (let i = 0; i < length; i++) {
+    // get current source
+    const source = srcSet[i];
+
+    // split url string by -
+    const parts = source.split('-');
+
+    // width is the last item and is a string number
+    const width = parts[parts.length - 1];
+
+    // formatted will add newly constructed string with a comma and a space if not last item
+    formatted +=
+      i < length - 1
+        ? `${parts.join('-')} ${width}w, `
+        : `${parts.join('-')} ${width}w`;
+  }
+
+  return formatted;
+};
+
+const isGeoSearchAllowed = (northEastBounds, southWestBounds) => {
+  return (
+    northEastBounds &&
+    northEastBounds.length === 2 &&
+    southWestBounds &&
+    southWestBounds.length === 2
+  );
+};
+
+const buildSearchStage = (
+  searchTerm,
+  { northEastBounds, southWestBounds }
+) => {
+  console.log('northEastBounds', northEastBounds);
+  console.log('southWestBounds', southWestBounds);
+
+  // mongodb atlas search index name
+  const index = 'main_search';
+  // check to see if the user is inside guinea's bounding box
+  const geoSearchAllowed = isGeoSearchAllowed(northEastBounds, southWestBounds);
+
+  if (!geoSearchAllowed) return;
+
+  // search stage
+  const searchStage = { $search: { index } };
+
+  // text search query
+  // const textQuery = {
+  //   query: searchTerm,
+  //   path: ['title', 'tags', 'description', 'address'],
+  //   fuzzy: {},
+  // };
+
+  // geo search query
+  const geoQuery = {
+    path: 'location',
+    box: {
+      bottomLeft: {
+        type: 'Point',
+        coordinates: southWestBounds,
+      },
+      topRight: {
+        type: 'Point',
+        coordinates: northEastBounds,
+      },
+    },
+  };
+
+  searchStage.$search.geoWithin = geoQuery;
+
+  console.log('SearchStage', searchStage);
+
+  // return built search stage based on above scenarios
+  return searchStage;
+};
+
+const buildFilterStage = query => {
+  const filterObject = {};
+
+  const filters = [
+    'type',
+    'purpose',
+    'price',
+    'area',
+    'areaBuilt',
+    'yearBuilt',
+    'fenced',
+    'bathrooms',
+    'garages',
+    'kitchens',
+    'livingRooms',
+    'diningRooms',
+    'pools',
+    'rooms',
+  ];
+
+  for (let filter of filters) filterObject[filter] = query[filter];
+
+  const regexp = /(lte)|(gte)/g;
+
+  const filterObjectString = JSON.stringify(filterObject).replace(
+    regexp,
+    value => `$${value}`
+  );
+
+  return {
+    $match: JSON.parse(filterObjectString),
+  };
+};
+
+const buildSortStage = string => {
+  if (!string) return;
+
+  const sortObject = {};
+
+  // -createdAt createdAt
+  const firstLetter = string[0];
+
+  if (firstLetter === '-') {
+    // copy string but exclude the -
+    const propertyName = string.slice(1);
+    // set sortObject to decending
+    sortObject[propertyName] = -1;
+  }
+  // set sortObject property to ascending
+  else sortObject[string] = 1;
+  // return stage
+
+  return {
+    $sort: sortObject,
+  };
+};
+
+const ownerLookupStage = [
   {
-    offererId: {
-      type: mongoose.Schema.Types.ObjectId,
-      required: [true, 'ID of offerer is required'],
-    },
-    offerPrice: {
-      type: Number,
-      required: [true, 'Offer price is required'],
-    },
-    paymentType: {
-      type: String,
-      enum: ['cash', 'check', 'transfer'],
-      required: [true, 'A payment type for an offer is required'],
-    },
-    propertyId: {
-      type: mongoose.Schema.Types.ObjectId,
-      required: [true, 'ID of property receiving offer is required'],
+    $lookup: {
+      from: 'accounts',
+      localField: 'ownerId',
+      foreignField: '_id',
+      as: 'owner',
     },
   },
-  { timestamps: true, toJSON: { virtuals: true } }
-);
-
-// virtuals
-offerSchema.virtual('offerer', {
-  ref: 'Account',
-  localField: 'offererId',
-  foreignField: '_id',
-  justOne: true,
-});
-
-offerSchema.virtual('property', {
-  ref: 'Property',
-  localField: 'propertyId',
-  foreignField: '_id',
-  justOne: true,
-});
-
-const Offer = mongoose.model('Offer', offerSchema);
-
-const imageSchema = new mongoose.Schema({
-  sourceName: {
-    type: String,
-    required: [true],
+  {
+    $set: {
+      owner: { $arrayElemAt: ['$owner', 0] },
+    },
   },
-  names: [String],
-});
+];
+
+const between = (num, min, max) => {
+  if (num < min) num = min;
+  if (num > max) num = max;
+  return num;
+};
+
+const calculatePagination = (total, page = 1, limit) => {
+  // minimum limit permitted
+  const minLimit = 1;
+  // maximum limit permitted
+  const maxLimit = 200;
+  // parsed limit defaults to 50 if not provided
+  // const limitInt = parseInt(limit) || 100;
+  const limitInt = parseInt(limit) || 5;
+
+  // get limit number between min & max
+  limit = between(limitInt, minLimit, maxLimit);
+
+  const pageInt = parseInt(page) || 1;
+  // minimum page permitted
+  const firstPage = total > 0 ? 1 : 0;
+  // calculated number of pages
+  const pages = Math.ceil(total / limit);
+  // maximum page permitted
+  const lastPage = pages;
+  // get page number between min & max
+  page = between(pageInt, firstPage, lastPage);
+
+  // calculate prev
+  const prevPage = firstPage < page ? page - 1 : null;
+  // calculate next
+  const nextPage = lastPage > page ? page + 1 : null;
+
+  // calculate skip
+  let skip = (page - 1) * limit;
+
+  // make sure skip is not negative
+  skip = skip >= 0 ? skip : 0;
+
+  // return pagination info
+  return {
+    limit,
+    page,
+    pages,
+    total,
+    prevPage,
+    nextPage,
+    skip,
+  };
+};
+
+// this takes stages and exclude empty stage
+const buildPipeline = (...stages) => stages.filter(stage => stage);
+
+const preProcessImage = property => {
+  if (!property) return;
+
+  const { CLOUDFRONT_URL } = process.env;
+  const { imagesNames } = property;
+
+  return imagesNames.map(({ sourceName, names }) => {
+    const smallestImage = names[0];
+    return {
+      sourceName: sourceName,
+      src: `${CLOUDFRONT_URL}/${smallestImage}`,
+      srcset: formatSrset(names.map(name => `${CLOUDFRONT_URL}/${name}`)),
+    };
+  });
+};
 
 const locationSchema = new mongoose.Schema({
   type: {
     type: String,
     required: [true],
-    enum: ['Point'],
+    enum: {
+      values: ['Point'],
+      message: 'Given location type is wrong',
+    },
     default: 'Point',
   },
   coordinates: {
     type: [Number],
-    required: [true],
+    required: [true, 'Un bien doit avoir des coordonées GPS'],
+    validator: {
+      validate(value) {
+        const [longitude, latitude] = value;
+
+        // values must be 2 Numbers
+        return (
+          value.length === 2 &&
+          typeof longitude === 'number' &&
+          typeof latitude === 'number'
+        );
+      },
+      message:
+        'Les coordonnées GPS doivent avoir une longitude et une latitude',
+    },
   },
 });
+
+const imageSchema = new mongoose.Schema({
+  sourceName: {
+    type: String,
+    required: [true, 'sourceName est réquis'],
+  },
+  names: [String],
+});
+
+const price = {
+  type: Number,
+  required: [true, 'A property needs a price'],
+  validate: [
+    {
+      validator: function () {
+        const { purpose, price } = this;
+
+        return (
+          (purpose === 'rent' && price >= 100000) ||
+          (purpose === 'sell' && price >= 10000000)
+        );
+      },
+      message: 'A property price cannot be less than this amount',
+    },
+    {
+      validator: function () {
+        const { purpose, price } = this;
+
+        return (
+          (purpose === 'rent' && price <= 10000000) ||
+          (purpose === 'sell' && price <= 900000000000)
+        );
+      },
+      message: 'A property price cannot exceed this amount',
+    },
+  ],
+};
+
+// create ascending & desc index in a field in one go
+const createAscDescIndex = (schema, field) => {
+  schema.index({ [field]: 1 });
+  schema.index({ [field]: -1 });
+};
+
+// house validator
+const validator = value => value !== 'house';
 
 // SCHEMA
 const propertySchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      required: [true],
+      required: [true, 'Un bien doit être soit une maison où un terrain'],
       enum: ['house', 'land'],
       lowercase: true,
     },
+
+    purpose: {
+      type: String,
+      enum: ['rent', 'sell'],
+      required: [true, 'Un motif du bien est réquis, soit a vendre où a louer'],
+      validate: {
+        validator(value) {
+          // property can't be land and be rented for now
+          if (this.type === 'land' && value === 'rent') return false;
+          return true;
+        },
+      },
+    },
+
+    price,
+
+    // only allowed for houses
+    rentPeriod: {
+      type: String,
+      default: function () {
+        return this.type === 'house' ? 'monthly' : undefined;
+      },
+      enum: ['monthly'],
+    },
+
     ownerId: {
-      required: [true],
-      unique: [true],
+      required: [true, 'Un bien doit avoir un propriétaire'],
       type: mongoose.Schema.Types.ObjectId,
     },
-    price: {
-      type: Number,
-      required: [true],
-    },
+
     location: {
       type: locationSchema,
-      required: [true],
+      required: [true, 'Un bien doit avoir une localisation GPS'],
     },
 
-    documented: {
-      type: Boolean,
+    // documented: {
+    //   type: Boolean,
+    // },
+
+    address: {
+      type: String,
+      required: [true, 'Un bien doit avoir un quartier'],
+      lowercase: true,
     },
+
     imagesNames: [imageSchema],
-    dimension: {},
+
+    area: {
+      type: Number,
+      required: [true, 'Surface est réquise'],
+    },
+
+    areaBuilt: {
+      type: Number,
+      required: [
+        function () {
+          this.type === 'house';
+        },
+        'Surface Batie est réquise',
+      ],
+      default: function () {
+        // if property is a house and user did not set this property set to area
+        return this.type === 'house' ? this.area : undefined;
+      },
+      validate: {
+        validator,
+        message: 'Surface Batie est permis que pour les maisons',
+      },
+    },
+
+    areaUnit: {
+      type: String,
+      required: [true, 'Unité de surface réquise'],
+      default: 'm²',
+    },
+
     title: {
       type: String,
-      required: [true],
+      max: [60, 'Un titre ne peut pas être plus de 60 lettres'],
+      required: [true, `Un bien a besoin d'un titre`],
     },
-    story: {
+
+    description: {
       type: String,
+      required: ['Une description est réquise'],
+      max: [1500, 'Une description ne peut pas être plus de 512 lettres'],
     },
+
     status: {
       type: String,
-      enum: ['available', 'pending', 'sold'],
+      required: [true, 'Status est réquis'],
+      enum: ['unlisted', 'listed', 'pending', 'sold', 'rented'],
+      default: 'unlisted',
     },
 
+    rooms: {
+      type: Number,
+      required: [
+        function () {
+          return this.type === 'house';
+        },
+        'Chambres est réquise',
+      ],
+      validate: {
+        validator,
+        message: 'Chambres est permis que pour les maisons',
+      },
+    },
+
+    bathrooms: {
+      type: Number,
+      required: [
+        function () {
+          return this.type === 'house';
+        },
+        'Douches est réquis is required',
+      ],
+      validate: {
+        validator,
+        message: 'Douches est permis que pour les maisons',
+      },
+    },
+
+    kitchens: {
+      type: Number,
+      default: function () {
+        return this.type === 'house' ? 0 : undefined;
+      },
+      required: [
+        function () {
+          return this.type === 'house';
+        },
+        'Cuisine est réquise',
+      ],
+      validate: {
+        validator,
+        message: 'Cuisine est permis que pour les maisons',
+      },
+    },
+
+    garages: {
+      type: Number,
+      default: function () {
+        return this.type === 'house' ? 0 : undefined;
+      },
+      required: [
+        function () {
+          return this.type === 'house';
+        },
+        'Garages est réquis',
+      ],
+      validate: {
+        validator,
+        message: 'Les garages sont permis que pour les maisons',
+      },
+    },
+
+    diningRooms: {
+      type: Number,
+      default: function () {
+        return this.type === 'house' ? 0 : undefined;
+      },
+      required: [
+        function () {
+          return this.type === 'house';
+        },
+        'diningRooms is required',
+      ],
+      validate: {
+        validator,
+        message: 'Les sale à manger sont permis que pour les maisons',
+      },
+    },
+
+    livingRooms: {
+      type: Number,
+      default: function () {
+        return this.type === 'house' ? 0 : undefined;
+      },
+      required: [
+        function () {
+          return this.type === 'house';
+        },
+        'livingRooms is required',
+      ],
+      validate: {
+        validator,
+        message: 'Les salons sont permis que pour les maisons',
+      },
+    },
+
+    yearBuilt: {
+      type: Number,
+      // minium property built year
+      min: [1800, 'Un bien built year must be from year 1800'],
+      // don't allow property buil year to be in the future
+      max: [
+        new Date().getFullYear(),
+        'Un bien ne peut pas etre construit dans le future',
+      ],
+      required: [
+        function () {
+          return this.type === 'house';
+        },
+        'Une maison doit avoir une année de construction',
+      ],
+    },
+
+    // cloturé
+    fenced: {
+      type: Boolean,
+      default: function () {
+        return this.type === 'house' ? false : undefined;
+      },
+      required: [true, 'Cloture est réquise'],
+    },
+
+    pools: {
+      type: Number,
+      default: function () {
+        return this.type === 'house' ? 0 : undefined;
+      },
+      required: [
+        function () {
+          return this.type === 'house';
+        },
+      ],
+      validate: {
+        validator,
+        message: 'Seul une maison possède de piscine',
+      },
+    },
     tags: [String],
   },
-  { timestamps: true, toJSON: { virtuals: true } }
+  { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
 
-// indexes
-propertySchema.index({
-  title: 'text',
-  story: 'text',
-  location: '2dsphere',
-  tags: 'text',
-});
+// Index all sortable fields
+
+createAscDescIndex(propertySchema, 'price');
+createAscDescIndex(propertySchema, 'title');
+createAscDescIndex(propertySchema, 'rooms');
+// createAscDescIndex(propertySchema, 'address');
+createAscDescIndex(propertySchema, 'area');
 
 // virtuals
 propertySchema.virtual('owner', {
@@ -548,147 +937,293 @@ propertySchema.virtual('owner', {
 });
 
 propertySchema.virtual('images').get(function () {
-  const property = this;
-  const { imagesNames } = property;
-  const baseURI = process.env.CLOUDFRONT_URL;
-
-  return imagesNames.map((image) => {
-    return {
-      src: `${baseURI}/${image.sourceName}`,
-      srcset: image.names.map((name) => `${baseURI}/${name}`),
-    };
-  });
+  // property
+  return preProcessImage(this);
 });
 
-// hooks
-
 // methods
+propertySchema.methods.toJSON = function () {
+  // account clone
+  const property = this.toObject();
+  // remove props from user object
+  deleteProps(property, 'imagesNames', '__v');
+  // return value will be sent to client
+  return property;
+};
 
 const Property = mongoose.model('Property', propertySchema);
 
-// location = { type: 'Point', coordinates: [79, 88] }
+const NO_LOCATION_ERROR_MESSAGE =
+  'Vous ne pouvez pas poster un bien sans ';
 
-const createOffer = catchAsyncErrors(async (req, res, next) => {
-  // only create offer if property exist
-  const property = await Property.findById(req.params.propertyId);
-  const accountId = req.account.id;
+const PROPERTY_NOTFOUND_ERROR_MESSAGE =
+  'This property does not exist on our server';
 
-  console.log('Account ID: ', accountId);
+const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 40;
 
-  if (!property) {
-    return next(
-      new ServerError$1('Cannot create offer for an unexisting property', 404)
-    );
-  }
+const MAX_IMAGE_ALLOWED_ERROR_MESSAGE = `Un bien ne peut pas avoir plus de ${maxImagesLength} photos`;
 
-  // don't allow property owner to create offer on their property
-  if (property.ownerId.equals(accountId)) {
-    return next(
-      new ServerError$1('You cannot make offers on your own properties', 400)
-    );
-  }
+const NOT_PERMITTED_ERROR_MESSAGE = `Vous n'êtes pas permis de performer ces actions`;
 
-  const potentialOffer = await Offer.findOne({
-    propertyId: property.id,
-    offererId: accountId,
+const fetchProperties = catchAsyncErrors(async (req, res, next) => {
+  const { north_east_bounds, south_west_bounds } = req.headers;
+
+  // location of user fetching properties
+  const userLocation = {
+    // bounds comes coupled as a comma separated string (lng,lat)
+    // split it and parse it to be a float number
+    northEastBounds: north_east_bounds
+      ? north_east_bounds.split(',').map(parseFloat)
+      : north_east_bounds,
+    southWestBounds: south_west_bounds
+      ? south_west_bounds.split(',').map(parseFloat)
+      : south_west_bounds,
+  };
+
+  console.log('User Location: ', userLocation);
+
+  // request queries
+  const { search, sortBy, limit, page } = req.query;
+
+  // search stage
+  const searchStage = buildSearchStage(search, userLocation);
+
+  // filter stage
+  const filterStage = buildFilterStage(req.query);
+
+  // get properties count
+  const countPipeline = buildPipeline(searchStage, filterStage);
+
+  const countResults = await Property.aggregate(countPipeline).count('total');
+
+  const propertyCount = countResults.length ? countResults[0].total : 0;
+
+  console.log('Property count: ', propertyCount);
+
+  // get pagination info
+  const pagination = calculatePagination(propertyCount, page, limit);
+
+  console.log(pagination);
+
+  // sort stage
+  const sortObject = buildSortStage(sortBy);
+
+  const pipeline = buildPipeline(searchStage, filterStage, sortObject);
+
+  const properties = await Property.aggregate(pipeline)
+
+    .skip(pagination.skip)
+    .limit(pagination.limit)
+    // use append because owner is an array to be transformed into an object
+    .append(ownerLookupStage);
+
+  // preprocess images for this property to serve client the right content
+  properties.forEach(property => {
+    property.images = preProcessImage(property);
+    // remove property names from the property object
+    delete property.imagesNames;
   });
 
-  // cannot make offers to the same property 2x
-  if (potentialOffer) {
-    return next(
-      new ServerError$1("You've already sent an offer for this property", 400)
-    );
-  }
+  console.log('Filters: ', filterStage);
+  // console.log('Filter Stage: ', filterStage);
+  console.log('Sort Object: ', sortObject);
 
-  // create offer
-  const offer = new Offer(req.body);
-  // tie offer to creator
-  offer.offererId = req.account.id;
-  // tie offer to property
-  offer.propertyId = property.id;
-  // save offer
-  await offer.save();
-  // send created offer
-  res.status(201).json(offer);
+  res.json({ ...pagination, properties });
 });
 
-const getOffers = catchAsyncErrors(async (req, res, next) => {
-  const offers = await Offer.find({ propertyId: req.params.propertyId })
-    .populate('offerer')
-    .populate('property');
-  res.json(offers);
+const createProperty = catchAsyncErrors(async (req, res, next) => {
+  const { location } = req.body;
+
+  // send an error if no location is passed
+  if (!location) return next(new ServerError(NO_LOCATION_ERROR_MESSAGE, 400));
+
+  // check to see if coordinates are in Guinea
+  const fullyInGuinea = true; // await insideGuinea(location.coordinates);
+
+  console.log('In Guinea ?: ', fullyInGuinea);
+
+  // create new property
+  const property = new Property(req.body);
+
+  // if promo period hasn't expired auto list property for free
+  // promo is 1 year so convert down to milliseconds
+  const promoPeriod =
+    parseInt(process.env.PROMO_PERIOD) * 12 * 30 * 24 * 60 * 60 * 1000;
+
+  const promoStartDate = parseInt(process.env.PROMO_START_DATE);
+
+  // promo is still running
+  if (promoStartDate + promoPeriod > Date.now()) property.published = true;
+
+  // associate property to it's owner
+  property.ownerId = req.account.id;
+
+  // save property to DB
+  await property.save();
+
+  res.status(201).json(property);
 });
 
-const getOffer = catchAsyncErrors(async (req, res, next) => {
-  // find offer
-  const offer = await Offer.findById(req.params.offerId)
-    .populate('offerer')
-    .populate('property');
-
-  // send an error if offer does not exist
-  if (!offer) {
-    return next(
-      new ServerError$1('This offer does not exist on our server', 404)
-    );
+const fetchProperty = catchAsyncErrors(async (req, res, next) => {
+  // fetch property
+  const property = await Property.findById(req.params.propertyId).populate(
+    'owner'
+  );
+  // send an error if property does not exist
+  if (!property) {
+    return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
   }
-  // send offer
-  res.json(offer);
+  // send property
+  res.json(property);
 });
 
-const updateOffer = catchAsyncErrors(async (req, res, next) => {
-  // don't allow anyone to update offerer
-  delete req.body.offererId;
-
-  // find offer
-  const offer = await Offer.findById(req.params.offerId);
-
-  // send error if offer is not found
-  if (!offer) {
-    return next(
-      new ServerError$1('This offer does not exist on our server', 404)
-    );
-  }
-
-  // only offer owner and admin allowed to remove offer
-  if (!offer.offererId.equals(req.account.id)) {
-    return next(
-      new ServerError$1(
-        'You do not have enough credentials to perform this action',
-        403
-      )
-    );
-  }
-
-  objectAssign(req.body, offer);
-
-  await offer.save();
-
-  res.json(offer);
+const fetchMyProperties = catchAsyncErrors(async (req, res, next) => {
+  res.json(await Property.find({ ownerId: req.account.id }));
 });
 
-const removeOffer = catchAsyncErrors(async (req, res, next) => {
-  // find offer
-  const offer = await Offer.findById(req.params.offerId);
+const updateProperty = catchAsyncErrors(async (req, res, next) => {
+  // don't allow anyone to update property owner
+  delete req.body.ownerId;
 
-  // error if offer not found
-  if (!offer) {
-    return next(
-      new ServerError$1('This offer does not exist on our server', 404)
-    );
+  const property = await Property.findById(req.params.propertyId);
+
+  if (!property) {
+    // error
+    return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
   }
 
-  // only offer owner and admin allowed to remove offer
-  if (!offer.offererId.equals(req.account.id)) {
-    return next(
-      new ServerError$1(
-        'You do not have enough credentials to perform this action',
-        403
-      )
-    );
+  if (!property.ownerId.equals(req.account.id)) {
+    return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
   }
 
-  // delete offer
-  await Offer.deleteOne({ _id: offer.id });
+  objectAssign(req.body, property, { mode: 'nostrict' });
+
+  await property.save();
+
+  res.json(property);
+});
+
+const removeProperty = catchAsyncErrors(async (req, res, next) => {
+  // find property
+  const property = await Property.findById(req.params.propertyId);
+
+  // send error if property doesn't exist
+  if (!property) {
+    return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
+  }
+
+  // only property owner and admin allowed accounts can delete
+  const allowedAccounts = ['admin', 'sub-admin', 'agent'];
+
+  const sameAccount = property.ownerId.equals(req.account.id);
+  const isAllowed = allowedAccounts.includes(req.account.role);
+
+  console.log('Same account: ', property.ownerId.equals(req.account.id));
+
+  console.log('Allowed: ', allowedAccounts.includes(req.account.role));
+
+  if (!sameAccount || (!sameAccount && !isAllowed)) {
+    return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
+  }
+
+  // delete all images of property from s3
+
+  const images = property.imagesNames;
+
+  for (let image of images) {
+    await removeFroms3(image.names);
+  }
+
+  // delete property from records
+  await Property.deleteOne({ _id: property.id });
+
+  res.status(204).json();
+});
+
+const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
+  // find property
+  const property = await Property.findOne({
+    _id: req.params.propertyId,
+    ownerId: req.account.id,
+  });
+
+  // send an error if property is not found
+  if (!property) {
+    return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
+  }
+
+  // how many images are stored for this property
+  const propertyImagesLength = property.imagesNames.length;
+  // uploaded images
+  const uploadedImages = req.files || [];
+
+  // maximum number of images allowed for a single property
+  const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 40;
+
+  if (
+    propertyImagesLength >= maxImagesLength ||
+    propertyImagesLength + uploadedImages.length > maxImagesLength
+  ) {
+    return next(new ServerError(MAX_IMAGE_ALLOWED_ERROR_MESSAGE, 400));
+  }
+
+  /* 
+    run this in the background
+    don't wait for this to finish before responding to client for better UI exp
+  */
+
+  uploadPropertyImages(uploadedImages, property);
+
+  res.json(property);
+});
+
+const removePropertyImages = catchAsyncErrors(async (req, res, next) => {
+  // account
+  const { account } = req;
+
+  // imageName and propertyId
+  const { propertyId } = req.params;
+
+  const { names } = req.body;
+
+  console.log(names);
+
+  // find property
+  const property = await Property.findById(propertyId);
+
+  // send an error if property is not found
+  if (!property) {
+    return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
+  }
+
+  // allow only owner and admin to delete image
+
+  if (!property.ownerId.equals(account.id)) {
+    return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
+  }
+
+  // imageNames
+  const { imagesNames } = property;
+
+  for (let imageName of names) {
+    // try to find the image to be deleted
+    const image = imagesNames.find(
+      imageObject => imageObject.sourceName === imageName
+    );
+
+    if (image) {
+      // remove image and all it's duplicates from s3
+      // run this in the background to save time of response
+      removeFroms3(image.names);
+
+      // remove image info from db
+      property.imagesNames = property.imagesNames.filter(
+        imageObject => imageObject.sourceName !== imageName
+      );
+    }
+  }
+
+  await property.save();
 
   res.status(204).json();
 });
@@ -698,52 +1233,63 @@ const accountSchema = new mongoose.Schema(
   {
     firstname: {
       type: String,
-      minlength: [4, 'Firstname cannot be less than 5 characetrs'],
-      maxlength: [15, 'Firstname cannot exceed 15 characters'],
-      required: [true, 'Firstname is required'],
-      lowercase: true,
+      minlength: [4, 'Prénom ne peut pas etre moins de 4 lettres'],
+      maxlength: [15, 'Prénom ne peut pas etre plus de 15 lettres'],
+      required: [true, 'Prénom est réquis'],
     },
+
     lastname: {
       type: String,
-      minlength: [2, 'Lastname cannot be less than 2 characetrs'],
-      maxlength: [10, 'Lastname cannot exceed 10 characters'],
-      required: [true, 'Lastname is required'],
-      lowercase: true,
+      minlength: [4, 'Nom ne peut pas etre moins de 2 lettres'],
+      maxlength: [15, 'Nom ne peut pas etre plus de 10 lettres'],
+      required: [true, 'Nom est réquis'],
     },
+
     email: {
       type: String,
-      required: [true, 'Email is required'],
-      unique: [true, 'Email already exist'],
+      required: [true, 'Email est réquis'],
+      unique: [true, 'Ce email existe déjà'],
       lowercase: true,
       validate: {
-        validator(value) {
-          return emailValidator.validate(value);
-        },
-        message: 'Invalid email address',
+        validator: value => emailValidator.validate(value),
+        message: 'Addresse email non valide',
       },
     },
-    contacts: {
-      type: [{ type: String, required: true }],
-      validate: [
-        (numbers) => numbers.length <= 3,
-        'Phone numbers max out at 3',
-      ],
+
+    phoneNumber: {
+      type: String,
+      // validate phone number
+      validate: {
+        validator: value => /^[67][05678]\d{7}$/.test(value),
+        message: 'Numéro de teléphone non valide',
+      },
     },
+
     role: {
       type: String,
       enum: ['admin', 'sub-admin', 'agent', 'client'],
-      required: [true],
+      required: [true, 'Un compte doit avoir un role'],
       default: 'client',
     },
+
     password: {
       type: String,
-      required: [true, 'Password is required'],
+      required: [true, 'Mot de passe réquis'],
     },
+
+    avatarUrl: {
+      type: String,
+      default: 'http://192.169.1.196:9090/assets/images/avatar.avif',
+    },
+
     avatarNames: [String],
+
     dob: {
       type: Date,
     },
+
     tokens: [String],
+
     resetToken: {
       type: String,
     },
@@ -753,17 +1299,21 @@ const accountSchema = new mongoose.Schema(
     ip: {
       type: String,
     },
+
     signedIn: {
       type: Date,
     },
+
     signedOut: {
       type: Date,
     },
+
     verified: {
       type: Boolean,
-      required: [true, 'Verified is required'],
+      required: [true, 'Verifié est réquis'],
       default: false,
     },
+
     verificationCode: String,
 
     verificationCodeExpirationDate: Date,
@@ -776,11 +1326,6 @@ const accountSchema = new mongoose.Schema(
 );
 
 // virtuals
-accountSchema.virtual('avatarUrls').get(function () {
-  return this.avatarNames.map(
-    (name) => `${process.env.CLOUDFRONT_URL}/${name}`
-  );
-});
 
 /** HOOKS */
 
@@ -798,11 +1343,13 @@ accountSchema.pre('save', async function (next) {
 
   const { password } = account;
 
+  const passwordLength = password.length;
+
   console.log(password);
 
-  if (password < minlength || password > maxlength) {
+  if (passwordLength < minlength || passwordLength > maxlength) {
     return next(
-      new ServerError('Your password is either too short or too long', 400)
+      new ServerError('Ton mot de passe est soit trop petit ou trop long', 400)
     );
   }
 
@@ -870,7 +1417,12 @@ accountSchema.methods.toJSON = function () {
     '__v',
     'reset_token',
     'reset_token_expiration_date',
-    'tokens'
+    'tokens',
+    'ip',
+    'verificationCode',
+    'verificationCodeExpirationDate',
+    'resetToken',
+    'resetTokenExpirationDate'
   );
   // return value will be sent to client
   return account;
@@ -882,32 +1434,34 @@ const authenticate = (type = 'client') => {
   return catchAsyncErrors(async (req, res, next) => {
     let query;
 
-    const authFailError = new ServerError$1('You are not authenticated', 401);
+    const authFailError = new ServerError('You are not authenticated', 401);
     // get token
-    const token = req.headers['authorization'];
+    const token = req.cookies.token || req.headers['authorization'];
 
     // req.cookies.AUTH_TOKEN;
     console.log(token);
 
     // verify token
-    const decoded = jsonwebtoken.verify(token, process.env.JWT_SECRET_KEY || 'secret');
-
-    if (!decoded) {
+    try {
+      jsonwebtoken.verify(token, process.env.JWT_SECRET || 'secret');
+    } catch (error) {
       return next(authFailError);
     }
-    // system auth
-    if (type === 'system')
-      query = { tokens: token, role: { $in: ['admin', 'sub-admin', 'agent'] } };
-    // client auth
-    else if (type === 'client') query = { tokens: token, role: 'client' };
-    // unknown auth
-    else return next(authFailError);
+
+    // query will use system auth if type = 'system' & client auth otherwise
+    query =
+      type === 'system'
+        ? { tokens: token, role: { $in: ['admin', 'sub-admin', 'agent'] } }
+        : { tokens: token, role: 'client' };
 
     // find account that has role as client
     const account = await Account.findOne(query);
 
-    if (!account) return next(authFailError);
+    if (!account) {
+      return next(authFailError);
+    }
 
+    req.authenticated = true;
     req.account = account;
     req.token = token;
 
@@ -919,7 +1473,7 @@ const allowAccessTo = (...roles) => {
   return (req, res, next) => {
     if (!roles.includes(req.account.role)) {
       return next(
-        new ServerError$1(
+        new ServerError(
           'You do not have enough credentials to access or perform these actions',
           403
         )
@@ -935,7 +1489,7 @@ const preventUnverifiedAccounts = catchAsyncErrors(
 
     if (!account.verified) {
       return next(
-        new ServerError$1(
+        new ServerError(
           'Please verify your account to access this ressource',
           403
         )
@@ -946,308 +1500,120 @@ const preventUnverifiedAccounts = catchAsyncErrors(
   }
 );
 
-const router$2 = express.Router({ mergeParams: true });
+const router$2 = express.Router();
+
+const properties = '/properties';
+const propertyRoute = `${properties}/:propertyId`;
 
 router$2
-  .route('/')
-  .get(getOffers)
-  .post(authenticate(), preventUnverifiedAccounts, createOffer);
-
-router$2
-  .route('/:offerId')
-  .get(getOffer)
-  .patch(authenticate(), updateOffer)
-  .delete(authenticate(), removeOffer);
-
-const fetchProperties = catchAsyncErrors(async (req, res, next) => {
-  const {
-    search,
-    type,
-    documented,
-    page = 1,
-    limit = 15,
-    location,
-  } = req.query;
-  // object containg search query
-  const searchObject = {};
-  // only assign search query to search object when present
-  search && objectAssign({ $text: { $search: search } }, searchObject);
-  // contains all filters
-  const filterObject = {};
-  // assign if present
-  objectAssign({ type, documented }, filterObject);
-  // contains sorting
-  let { sortBy } = req.query;
-  // contains pagination info
-  const pagination = { page, limit };
-  // paginate data
-  const data = await paginateModel(
-    Property,
-    searchObject,
-    filterObject,
-    sortBy,
-    pagination,
-    'owner'
-  );
-
-  res.json(data);
-});
-
-const createProperty = catchAsyncErrors(async (req, res, next) => {
-  console.log(req.body.location);
-  const { lat, long } = req.body.location;
-  console.log('Latitude: ', lat, 'Longitude: ', long);
-
-  console.log(req.body.location);
-  // create new property
-  const property = new Property(req.body);
-
-  const location = {
-    coordinates: req.body.location.coords,
-  };
-
-  property.location = location;
-
-  // associate property to it's owner
-  property.ownerId = req.account.id;
-
-  // property uploaded images
-  let images = req.files || [];
-
-  // save property to DB
-  await property.save();
-
-  // upload property images to S3 bucket
-  await uploadPropertyImages(images, property, next);
-
-  // send success response
-  res.status(201).json(property);
-});
-
-const fetchProperty = catchAsyncErrors(async (req, res, next) => {
-  // fetch property
-  const property = await Property.findById(req.params.propertyId).populate(
-    'owner'
-  );
-  // send an error if property does not exist
-  if (!property) {
-    return next(
-      new ServerError$1('This property does not exist on our server', 404)
-    );
-  }
-  // send property
-  res.json(property);
-});
-
-const updateProperty = catchAsyncErrors(async (req, res, next) => {
-  // don't allow anyone to update property owner
-  delete req.body.ownerId;
-
-  const property = await Property.findById(req.params.propertyId);
-
-  if (!property) {
-    // error
-    return next(
-      new ServerError$1('This property does not exist on our server', 404)
-    );
-  }
-
-  if (!property.ownerId.equals(req.account.id)) {
-    return next(
-      new ServerError$1(
-        'You do not have enough credentials to perform this action',
-        404
-      )
-    );
-  }
-
-  objectAssign(req.body, property);
-
-  await property.save();
-
-  res.json(property);
-});
-
-const removeProperty = catchAsyncErrors(async (req, res, next) => {
-  // find property
-  const property = await Property.findById(req.params.propertyId);
-
-  // send error if property doesn't exist
-  if (!property) {
-    return next(
-      new ServerError$1('This property does not exist on our server', 404)
-    );
-  }
-
-  // only property owner and admin allowed accounts can delete
-  const allowedAccounts = ['admin', 'sub-admin', 'agent'];
-
-  if (
-    !property.ownerId.equals(req.account.id) ||
-    !allowedAccounts.includes(req.account.role)
-  ) {
-    return next(
-      new ServerError$1(
-        'You do not have enough credentials to perform this action',
-        404
-      )
-    );
-  }
-
-  // delete all images of property from s3
-
-  const images = property.imagesNames;
-
-  for (let image of images) {
-    await removeFroms3(image.names);
-  }
-
-  // delete property from records
-  await Property.deleteOne({ _id: property.id });
-
-  res.status(204).json();
-});
-
-const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
-  // find property
-  const property = await Property.findOne({
-    _id: req.params.propertyId,
-    ownerId: req.account.id,
-  });
-
-  // send an error if property is not found
-  if (!property) {
-    return next(
-      new ServerError$1('This property does not exist on our server', 404)
-    );
-  }
-
-  // how many images are stored for this property
-  const propertyImagesLength = property.imagesNames.length;
-  // uploaded images
-  const uploadedImages = req.files || [];
-
-  console.log(uploadedImages);
-  // maximum number of images allowed for a single property
-  const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 12;
-
-  if (
-    propertyImagesLength >= maxImagesLength ||
-    propertyImagesLength + uploadedImages.length > maxImagesLength
-  ) {
-    return next(
-      new ServerError$1(
-        `A property cannot have more than ${maxImagesLength} images`,
-        400
-      )
-    );
-  }
-
-  await uploadPropertyImages(uploadedImages, property, next);
-
-  res.json(property);
-});
-
-const removePropertyImage = catchAsyncErrors(async (req, res, next) => {
-  // account
-  const { account } = req;
-
-  // imageName and propertyId
-  const { imageName, propertyId } = req.params;
-
-  // find property
-  const property = await Property.findById(propertyId);
-
-  // send an error if property is not found
-  if (!property) {
-    return next(
-      new ServerError$1('This property does not exist on our server', 404)
-    );
-  }
-
-  // allow only owner and admin to delete image
-  console.log(property.ownerId.equals(account.id));
-  if (!property.ownerId.equals(account.id)) {
-    return next(
-      new ServerError$1('You are not allowed to perform this action', 403)
-    );
-  }
-
-  // imageNames
-  const { imagesNames } = property;
-
-  // try to find the image to be deleted
-  const image = property.imagesNames.find(
-    (imageObject) => imageObject.sourceName === imageName
-  );
-
-  if (!image) {
-    return next(
-      new ServerError$1('This image does not exist on our server', 404)
-    );
-  }
-
-  // remove image and all it's duplicates from s3
-  await removeFroms3(image.names);
-
-  // remove image info from db
-  property.imagesNames = imagesNames.filter(
-    (imageObject) => imageObject.sourceName !== imageName
-  );
-
-  await property.save();
-
-  res.json();
-});
-
-const router$1 = express.Router();
-
-const parentRoute$1 = '/properties';
-const childRoute = `${parentRoute$1}/:propertyId`;
-
-router$1
-  .route(`${parentRoute$1}`)
+  .route(properties)
   .get(fetchProperties)
-  .post(
-    uploader({ files: 12 }).any(),
-    authenticate(),
-    preventUnverifiedAccounts,
-    createProperty
-  );
+  .post(authenticate(), preventUnverifiedAccounts, createProperty);
 
-router$1
-  .route(childRoute)
+router$2.get(`${properties}/my-properties`, authenticate(), fetchMyProperties);
+
+router$2
+  .route(propertyRoute)
   .get(fetchProperty)
   .patch(authenticate(), updateProperty)
   .delete(authenticate(), removeProperty);
 
-router$1.post(
-  `${childRoute}/images`,
+// add images to property
+router$2.post(
+  `${propertyRoute}/images`,
   authenticate(),
-  uploader({ files: 12 }).any(),
+  uploader({ files: 40 }).any(),
   addPropertyImages
 );
 
-router$1.delete(
-  `${childRoute}/images/:imageName`,
+// remove a property image
+router$2.post(
+  `${propertyRoute}/images/delete`,
   authenticate(),
-  removePropertyImage
+  removePropertyImages
 );
 
-router$1.use(`${childRoute}/offers`, router$2);
-
 // SYSTEM SPECIFIC ROUTES
-router$1
+router$2
   .route('system/properties/:propertyId')
   .patch(authenticate('system'), updateProperty)
   .delete(authenticate('system'), removeProperty);
+
+const EXISTING_ACCOUNT_ERROR_MESSGE = 'Ce compte existe déjà';
+
+const UNEXISTING_ACCOUNT_ERROR_MESSAGE = `Ce compte n'existe pas`;
+
+const INVALID_PASSWORD_ERROR_MESSAGE = 'Ce mot de passe est non valide';
+
+const SAME_PASSWORD_ERROR_MESSAGE = `Votre nouveau mot de passe doit être different de l'actuel`;
+
+const VERIFIED_ACCOUNT_ERROR_MESSAGE = `Votre compte est déjà verifié`;
+
+const VERFIFY_ACCOUNT_FAIL_ERROR_MESSAGE = `Malheureusement, nous n'avions pas pu vérifier votre compte`;
+
+const MAIL_DELIVERY_FAIL_ERROR_MESSAGE = `Malheuresement notre service email n'a pas pu vous délivrer l'email`;
+
+const sendEmail = content => {
+  const { SMTP_HOSTNAME, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD } =
+    process.env;
+
+  const transporter = nodemailer.createTransport({
+    host: SMTP_HOSTNAME,
+    port: SMTP_PORT,
+    auth: {
+      user: SMTP_USERNAME,
+      pass: SMTP_PASSWORD,
+    },
+  });
+
+  return transporter.sendMail(content);
+};
+
+// export const sendEmail = content => {
+//   let attempts = 0;
+//   let maxAttempts = 3;
+//   let timeout = 0;
+
+//   const { SMTP_HOSTNAME, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD } =
+//     process.env;
+
+//   const transporter = nodemailer.createTransport({
+//     host: SMTP_HOSTNAME,
+//     port: SMTP_PORT,
+//     auth: {
+//       user: SMTP_USERNAME,
+//       pass: SMTP_PASSWORD,
+//     },
+//   });
+
+//   return new Promise((resolve, reject) => {
+//     const sender = async () => {
+//       attempts++;
+
+//       console.log('I am sending the email ', attempts);
+
+//       if (attempts >= maxAttempts) return reject('failed to send mail');
+
+//       try {
+//         await transporter.sendMail(content);
+
+//         resolve('sent');
+//       } catch (error) {
+//         timeout += 1000;
+//         setTimeout(sender, timeout);
+//       }
+//     };
+
+//     return sender();
+//   });
+// };
 
 // REGULAR USER HANDLERS
 const signup = catchAsyncErrors(async (req, res, next) => {
   // make sure this account does not exist before we create one
   if (await Account.findOne({ email: req.body.email })) {
     return next(
-      new ServerError$1('This account already exist. Please Log In!', 400)
+      new ServerError(`${EXISTING_ACCOUNT_ERROR_MESSGE}. Connecter vous`, 400)
     );
   }
   // create new account
@@ -1266,32 +1632,37 @@ const signup = catchAsyncErrors(async (req, res, next) => {
   await account.save();
 
   // get account avatar if uploaded
-  const avatar = req.files ? req.files[0] : undefined;
+  const avatar = req.file;
 
   // proccess and upload avatar to s3
-  await uploadAvatar(avatar, account, next);
+  await uploadAvatar(avatar, account);
 
-  // setCookie(res, 'Auth-Token', token);
-  res.setHeader('auth_token', token);
+  res.setHeader('token', token);
+
+  setCookie(res, 'token', token);
 
   res.json(account);
 });
 
 const signin = catchAsyncErrors(async (req, res, next) => {
   const { email, password } = req.body;
+
+  console.log(email, password);
   // find account
   const account = await Account.findOne({ email, role: 'client' });
 
+  console.log(account);
+
   if (!account) {
     // account does not exist err
-    return next(new ServerError$1('Account not found', 401));
+    return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 401));
   }
 
   // verify password
   const isPasswordValid = await account.validatePassword(password);
 
   if (!isPasswordValid) {
-    return next(new ServerError$1('Invalid password', 401));
+    return next(new ServerError(INVALID_PASSWORD_ERROR_MESSAGE, 401));
   }
 
   // store ip and last time user logged in
@@ -1300,14 +1671,23 @@ const signin = catchAsyncErrors(async (req, res, next) => {
   // regular users have long expiration tokens while admins and agents' expire in 1d
   const token = generateJwt(account.id);
 
+  // don't allow more than specified login
+  const tokensLength = account.tokens.length;
+
+  // if logged in token + this login token > specified
+  // wipe old tokens to logout previous devices
+
+  if (tokensLength + 1 > parseInt(process.env.MAX_LOGIN_TOKENS || 5)) {
+    account.tokens = [];
+  }
   // store token
   account.tokens.push(token);
 
   await account.save();
 
-  //setCookie(res, 'Auth-Token', token);
+  setCookie(res, 'token', token);
 
-  res.setHeader('auth_token', token);
+  res.setHeader('token', token);
 
   res.json(account);
 });
@@ -1315,15 +1695,18 @@ const signin = catchAsyncErrors(async (req, res, next) => {
 const signout = catchAsyncErrors(async (req, res, next) => {
   const { account, token } = req;
 
-  // log user out
+  // record signout date
   account.signedOut = Date.now();
-  account.tokens = account.tokens.filter((t) => t !== token);
+
+  // log user out from server
+  account.tokens = account.tokens.filter(t => t !== token);
 
   await account.save();
-  // remove cookie (not required)
-  // setCookie(res, 'Auth-Token', undefined, { maxAge: 0 });
 
-  res.status(204).json();
+  // remove cookie (not required)
+  res.clearCookie('token');
+
+  res.status(204).json({});
 });
 
 const changeMyPassword = catchAsyncErrors(async (req, res, next) => {
@@ -1336,23 +1719,28 @@ const changeMyPassword = catchAsyncErrors(async (req, res, next) => {
   const { account } = req;
 
   if (currentPassword === password)
-    return next(
-      new ServerError$1('Your current and new password cannnot be the same', 400)
-    );
+    return next(new ServerError(SAME_PASSWORD_ERROR_MESSAGE, 400));
 
   // validate pwd
   const isPasswordValid = await account.validatePassword(currentPassword);
 
   // send error if not valid
   if (!isPasswordValid) {
-    return next(new ServerError$1('Invalid password', 401));
+    return next(new ServerError(INVALID_PASSWORD_ERROR_MESSAGE, 401));
   }
 
   // update pwd
   objectAssign({ password }, account);
 
   // update tokens
-  account.tokens = [];
+  const token = generateJwt(account.id);
+
+  account.tokens = [token];
+
+  // sign account in
+  setCookie(res, 'token', token);
+
+  res.setHeader('token', token);
 
   // save
   await account.save();
@@ -1367,7 +1755,7 @@ const getMyAccount = catchAsyncErrors(async (req, res, next) => {
 const updateMyAccount = catchAsyncErrors(async (req, res, next) => {
   const { account } = req;
 
-  const avatar = req.files ? req.files[0] : undefined;
+  const avatar = req.file;
 
   const { firstname, lastname } = req.body;
 
@@ -1375,18 +1763,26 @@ const updateMyAccount = catchAsyncErrors(async (req, res, next) => {
 
   await account.save();
 
-  // process and update avatar
-  await uploadAvatar(avatar, account, next);
-
+  // respond to user
   res.json(account);
+
+  // remove old avatars from s3
+  // const oldAvatarNames = account.avatarNames;
+
+  // await removeFroms3(account.);
+
+  // process and update avatar
+  uploadAvatar(avatar, account);
 });
 
 const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
   // alongside delete offers and properties created by this account
   // id of logged in account
   const accountId = req.account.id;
+
   // find all properties owned by this account
-  const myProperties = await Property.find({ ownerId: accountId }).lean();
+  const myProperties = await Property.find({ ownerId: accountId });
+
   // remove images of all properties made by this account from s3 bucket
   for (let property of myProperties) {
     const images = property.imagesNames;
@@ -1394,10 +1790,9 @@ const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
       await removeFroms3(image.names);
     }
   }
-  // delete properties owned by this account
+  // delete all properties owned by this account
   await Property.deleteMany({ ownerId: accountId });
-  // delete all offers made by this account
-  await Offer.deleteMany({ offererId: accountId });
+
   // finally delete account
   await Account.deleteOne({ _id: req.account.id });
   // respond to client
@@ -1411,13 +1806,32 @@ const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
 
   // send error
   if (!account) {
-    return next(
-      new ServerError$1('This account does not exist on our server', 401)
-    );
+    return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 401));
   }
 
   // generate reset token
   const resetToken = await account.generateResetToken();
+
+  // construct a url to send to the user to reset their password
+
+  const resetUrl = `${req.protocol}://${req.hostname}:3000/my-account/reset-my-password/${resetToken}`;
+
+  // console.log(resetUrl);
+  // send email to client
+  const mail = {
+    from: 'rallygene0@gmail.com', // sender address
+    to: email, // list of receivers
+    subject: 'Reset Password Instructions ✔', // Subject line
+    text: resetUrl, // plain text body
+    // html: '<b>Hello world?</b>', // html body
+  };
+
+  try {
+    await sendEmail(mail);
+  } catch (e) {
+    // console.log(e);
+    return next(new ServerError(MAIL_DELIVERY_FAIL_ERROR_MESSAGE));
+  }
 
   res.json({ resetToken });
 });
@@ -1440,25 +1854,23 @@ const resetMyPassword = catchAsyncErrors(async (req, res, next) => {
 
   // send error
   if (!account) {
-    return next(
-      new ServerError$1('This account does not exist on our server', 404)
-    );
+    return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 404));
   }
 
   // don't allow account to use the same password as current one
   if (await account.validatePassword(password)) {
-    return next(
-      new ServerError$1('Your current and new password cannot be the same', 400)
-    );
+    return next(new ServerError(SAME_PASSWORD_ERROR_MESSAGE, 400));
   }
 
   // update password and default reset token & exp date
-  // didn't use objectAssign because it's strict will not assign falsy values
-  account.resetToken = undefined;
-  account.resetTokenExpirationDate = undefined;
-  account.password = password;
 
-  console.log(account);
+  const newUpdates = {
+    resetToken: undefined,
+    resetTokenExpirationDate: undefined,
+    password: undefined,
+  };
+
+  objectAssign(newUpdates, account, { mode: 'nostrict' });
 
   // logout all tokens stored before pwd change
   account.tokens = [];
@@ -1483,13 +1895,11 @@ const verifyAccount = catchAsyncErrors(async (req, res, next) => {
 
   // send error, no account found
   if (!account) {
-    return next(
-      new ServerError$1('Unfortunately, we could not verify your account', 400)
-    );
+    return next(new ServerError(VERFIFY_ACCOUNT_FAIL_ERROR_MESSAGE, 400));
   }
 
   if (account.verified) {
-    return next(new ServerError$1('Your account is already verified', 400));
+    return next(new ServerError(VERIFIED_ACCOUNT_ERROR_MESSAGE, 400));
   }
 
   // mark account as verified
@@ -1499,14 +1909,15 @@ const verifyAccount = catchAsyncErrors(async (req, res, next) => {
       verificationCode: undefined,
       verificationCodeExpirationDate: undefined,
     },
-    account
+    account,
+    { mode: 'nostrict' }
   );
 
   // save account
   await account.save();
 
   // respond to client
-  res.json({ message: 'Your account has successfully been verfified' });
+  res.json({ message: 'votre compte à été verifier avec succès' });
 });
 
 const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
@@ -1514,13 +1925,34 @@ const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
 
   // don't send code to email if user is already verified
   if (account.verified) {
-    return next(new ServerError$1('This account is already verified', 400));
+    return next(new ServerError(VERIFIED_ACCOUNT_ERROR_MESSAGE, 400));
   }
 
   // generate verification code
   const verificationCode = await account.generateVerificationCode();
 
-  res.json({ verificationCode });
+  // generate verification code url
+  const verifyUrl = `${req.protocol}://${req.hostname}:3000/verify/${verificationCode}`;
+
+  // send email to client
+  const mail = {
+    from: 'rallygene0@gmail.com',
+    to: account.email,
+    subject: 'Verify Account Instructions ✔',
+    text: verifyUrl,
+    body: 'testing',
+  };
+
+  try {
+    const resp = await sendEmail(mail);
+
+    console.log(resp);
+  } catch (e) {
+    console.log('error when sending email : ', e);
+    return next(new ServerError(MAIL_DELIVERY_FAIL_ERROR_MESSAGE));
+  }
+
+  res.json({ verificationCode, message: 'Email delivrer avec succès' });
 });
 
 // SYSTEM ROUTE HANDLERS
@@ -1538,14 +1970,14 @@ const systemSignIn = catchAsyncErrors(async (req, res, next) => {
 
   if (!account) {
     // account does not exist err
-    return next(new ServerError$1('Account not found', 401));
+    return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 401));
   }
 
   // verify password
   const isPasswordValid = await account.validatePassword(password);
 
   if (!isPasswordValid) {
-    return next(new ServerError$1('Invalid password', 401));
+    return next(new ServerError(INVALID_PASSWORD_ERROR_MESSAGE, 401));
   }
 
   objectAssign({ ip: req.ip, signedIn: Date.now() }, account);
@@ -1569,12 +2001,7 @@ const systemAdminCreateAccount = catchAsyncErrors(
   async (req, res, next) => {
     // don't allow admin accounts creations
     if (req.body.role === 'admin') {
-      return next(
-        new ServerError$1(
-          'You do not have permission to perform these actions',
-          403
-        )
-      );
+      return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
     }
 
     const account = new Account(req.body);
@@ -1601,7 +2028,7 @@ const systemAdminAccountUpdate = catchAsyncErrors(
     const account = await Account.findById(req.params.accountId);
     // if account does not exist send err
     if (!account) {
-      return next(new ServerError$1('Account not found', 401));
+      return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 401));
     }
     // update properties
     objectAssign({ firstname, lastname }, account);
@@ -1616,7 +2043,8 @@ const systemAdminRemoveAccount = catchAsyncErrors(
   async (req, res, next) => {
     const account = await Account.findById(req.params.accountId);
 
-    if (!account) return next(new ServerError$1('Account not found', 404));
+    if (!account)
+      return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 404));
 
     if (
       account.role === 'admin' ||
@@ -1624,9 +2052,7 @@ const systemAdminRemoveAccount = catchAsyncErrors(
         account.role === 'sub-admin' &&
         !account._id.equals(req.account.id))
     )
-      return next(
-        new ServerError$1("You're not allowed to perform these actions", 404)
-      );
+      return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
     // delete account
     await Account.deleteOne({ _id: req.params.accountId });
     // send response
@@ -1642,14 +2068,14 @@ const systemAdminPasswordChange = catchAsyncErrors(
     });
     // if account does not exist send err
     if (!account) {
-      return next(new ServerError$1('Account not found', 401));
+      return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 401));
     }
 
     // if (account.role === 'admin'account._id.equals(req.account.id)) {
 
     // }
     // reset password to default and force account to update password
-    account.password = process.env.DEFAULT_SYSTEM_PASSWORD || 'DFSP-APP';
+    account.password = generateDfPassword(account.firstname, account.lastname);
 
     await account.save();
 
@@ -1657,105 +2083,116 @@ const systemAdminPasswordChange = catchAsyncErrors(
   }
 );
 
-const router = express.Router();
+const router$1 = express.Router();
 
 const parentRoute = '/accounts';
 
 const systemParentRoute = `/system${parentRoute}`;
 
-router.post(`${parentRoute}/signup`, uploader({ files: 1 }).any(), signup);
-
 /** AUTHENTICATED */
 
-router.post(`${parentRoute}/signout`, authenticate(), signout);
+router$1
+  .route(`${parentRoute}/my-account`)
 
-router.get(`${parentRoute}/my-account`, authenticate(), getMyAccount);
+  // fetch my account
+  .get(authenticate(), getMyAccount)
+
+  // update my account
+  .patch(authenticate(), uploader().single('avatar'), updateMyAccount)
+
+  // remove my account
+  .delete(authenticate(), deleteMyAccount);
+
+// logout
+router$1.post(`${parentRoute}/signout`, authenticate(), signout);
 
 /** NOT AUTHENTICATED */
 
-router.post(`${parentRoute}/signin`, signin);
+router$1.post(`${parentRoute}/signup`, uploader().single('avatar'), signup);
 
-router.post(`${parentRoute}/forgot-my-password`, forgotMyPassword);
+router$1.post(`${parentRoute}/signin`, signin);
 
-router.patch(`${parentRoute}/reset-password/:resetToken`, resetMyPassword);
+router$1.post(`${parentRoute}/forgot-my-password`, forgotMyPassword);
+
+router$1.patch(`${parentRoute}/reset-my-password/:resetToken`, resetMyPassword);
 
 /** AUTHENTICATED */
 
-router.patch(
+router$1.patch(
   `${parentRoute}/change-my-password`,
   authenticate(),
   changeMyPassword
 );
 
-router.patch(
-  `${parentRoute}/update-my-account`,
-  authenticate(),
-  updateMyAccount
-);
-
-router.delete(
-  `${parentRoute}/delete-my-account`,
-  authenticate(),
-  allowAccessTo('client'),
-  deleteMyAccount
-);
-
 // verify account
-router.get(`${parentRoute}/verify/:code`, authenticate(), verifyAccount);
+router$1.get(`${parentRoute}/verify/:code`, authenticate(), verifyAccount);
 
 // send verification code
-router.get(
+router$1.get(
   `${parentRoute}/verification-code`,
   authenticate(),
   sendVerficationCode
 );
 
 // SYSTEM ROUTES
-router.post(`${systemParentRoute}/signin`, systemSignIn);
-router.post(`${systemParentRoute}/signout`, authenticate('system'), signout);
-router.patch(
+router$1.post(`${systemParentRoute}/signin`, systemSignIn);
+router$1.post(`${systemParentRoute}/signout`, authenticate('system'), signout);
+router$1.patch(
   `${systemParentRoute}/change-my-password`,
   authenticate('system'),
   changeMyPassword
 );
 
 // ADMIN ROUTES
-router.get(
+router$1.get(
   `${systemParentRoute}/my-account`,
   authenticate('system'),
   getMyAccount
 );
 
-router.post(
+router$1.post(
   `${systemParentRoute}/create-account`,
   authenticate('system'),
   allowAccessTo('admin', 'sub-admin'),
   systemAdminCreateAccount
 );
-router.patch(
+router$1.patch(
   `${systemParentRoute}/update-account/:accountId`,
   authenticate('system'),
   allowAccessTo('admin', 'sub-admin'),
   systemAdminAccountUpdate
 );
-router.delete(
+router$1.delete(
   `${systemParentRoute}/delete-account/:accountId`,
   authenticate('system'),
   allowAccessTo('admin', 'sub-admin'),
   systemAdminRemoveAccount
 );
-router.patch(
+router$1.patch(
   `${systemParentRoute}/change-password/:accountId`,
   authenticate('system'),
   allowAccessTo('admin', 'sub-admin'),
   systemAdminPasswordChange
 );
 
+const router = express.Router();
+
+// API main routes
+
+// Accounts Router
+router.use('/', router$1);
+// Properties Router
+router.use('/', router$2);
+
+// Handle 404 Not found
+router.all('/*', unroutable);
+
 // start db connection
 const connectToDb = async () => {
   try {
     await mongoose.connect(
-      process.env.DATABASE_URL || 'mongodb://localhost:27017/houses&lands'
+      process.env.DATABASE_URL
+      // || 'mongodb://localhost:27017/houses&lands'
     );
     console.log('sucessfull connection to db');
 
@@ -1763,7 +2200,7 @@ const connectToDb = async () => {
       email: process.env.ADMIN_EMAIL || 'abdourahmanedbalde@gmail.com',
     });
 
-    console.log(admin);
+    // console.log(admin);
 
     if (!admin) {
       const firstname = process.env.ADMIN_FIRSTNAME;
@@ -1780,7 +2217,7 @@ const connectToDb = async () => {
         contacts,
         password,
         role,
-        ip,
+        // ip,
         // year month (begin at 0 march = idx 2) day
         dob: new Date(2000, 2, 17),
       });
@@ -1793,45 +2230,88 @@ const connectToDb = async () => {
   } catch (error) {
     console.log('Failed db connection');
     console.log(error);
+
+    // we can't do anything without db access, shutdown server
+    process.exit();
   }
 };
 
-const setupExpressMiddleware = (server) => {
+// setup all middleware functions
+const setupExpressMiddleware = server => {
   // setup environment variables
   dotenv.config();
+
   // parse json
   server.use(express.json());
+
+  // parse form data
+  server.use(express.urlencoded({ extended: true }));
+
+  // parse req params
+  server.use(expressQueryParser.queryParser({ parseBoolean: true, parseNumber: true }));
+
   // setup cors
-  server.use(cors());
+  // server.use(cors());
+
+  server.use(
+    cors({
+      origin: 'http://192.168.1.196:3000',
+      // origin: 'http://localhost:3000',
+      credentials: true,
+    })
+  );
+
   // parse cookies
   server.use(cookieParser());
+
   // setup compression
   server.use(compress());
+
   // setup helmet to protect server
   server.use(helmet());
 
   // serve static files
-  server.use(express.static(path.resolve(__dirname, 'Public')));
+  server.use(express.static(path.resolve(__dirname, 'public')));
 
-  // server main routes
+  // sanitize every source of user input
+  // Request Body, URL Parameters, URL Query Parameters
+  server.use(mongoSanitize());
+
+  // server.get('api./subdomain', (req, res) => res.send('Test working...'));
+
+  // WEB SERVER ROUTES
+  server.use('/', router$3);
+
+  // API ROUTES
   server.use('/api/v1', router);
-  server.use('/api/v1', router$1);
 
-  // handles all unmacthing routes
-  server.all('*', unroutable);
+  /* 
+    Always serve the same html file since this is a single page app
+    React will handle the routing on the client
+  */
+  server.all('*', (req, res) =>
+    res.sendFile(path.resolve(__dirname, 'public', 'index.html'))
+  );
 
-  // error handler
+  // Global Error handler
   server.use(globalErrorHandler);
 };
 
-// port listeners
-const listen = async (server, port = process.env.PORT || 9090) => {
+// Port listener
+const listen = async (
+  server,
+  port = parseInt(process.env.PORT) || 9090
+) => {
   try {
     await server.listen(port, console.log);
+
     console.log('listening on port 9090');
+
     console.clear();
   } catch (error) {
+    // we must able to listen for connection on this port shutdown server
     console.log('failing to listen on port 9090');
+    process.exit();
   }
 };
 
@@ -1839,10 +2319,12 @@ const server = express();
 
 express();
 
-// connect to mongodb
-connectToDb();
 // setup express middlewares
 setupExpressMiddleware(server);
+
+// connect to mongodb
+connectToDb();
+
 // listen on determined port
 listen(server);
 

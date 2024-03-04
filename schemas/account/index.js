@@ -1,60 +1,72 @@
 import mongoose from 'mongoose';
 import argon from 'argon2';
-import { deleteProps, hashToken } from '../utils';
+import { deleteProps, hashToken } from '../../utils';
 import crypto from 'crypto';
 import emailValidator from 'email-validator';
+import { ServerError } from '../../handlers/errors';
 
 // SCHEMA
 const accountSchema = new mongoose.Schema(
   {
     firstname: {
       type: String,
-      minlength: [4, 'Firstname cannot be less than 5 characetrs'],
-      maxlength: [15, 'Firstname cannot exceed 15 characters'],
-      required: [true, 'Firstname is required'],
-      lowercase: true,
+      minlength: [4, 'Prénom ne peut pas etre moins de 4 lettres'],
+      maxlength: [15, 'Prénom ne peut pas etre plus de 15 lettres'],
+      required: [true, 'Prénom est réquis'],
     },
+
     lastname: {
       type: String,
-      minlength: [2, 'Lastname cannot be less than 2 characetrs'],
-      maxlength: [10, 'Lastname cannot exceed 10 characters'],
-      required: [true, 'Lastname is required'],
-      lowercase: true,
+      minlength: [4, 'Nom ne peut pas etre moins de 2 lettres'],
+      maxlength: [15, 'Nom ne peut pas etre plus de 10 lettres'],
+      required: [true, 'Nom est réquis'],
     },
+
     email: {
       type: String,
-      required: [true, 'Email is required'],
-      unique: [true, 'Email already exist'],
+      required: [true, 'Email est réquis'],
+      unique: [true, 'Ce email existe déjà'],
       lowercase: true,
       validate: {
-        validator(value) {
-          return emailValidator.validate(value);
-        },
-        message: 'Invalid email address',
+        validator: value => emailValidator.validate(value),
+        message: 'Addresse email non valide',
       },
     },
-    contacts: {
-      type: [{ type: String, required: true }],
-      validate: [
-        (numbers) => numbers.length <= 3,
-        'Phone numbers max out at 3',
-      ],
+
+    phoneNumber: {
+      type: String,
+      // validate phone number
+      validate: {
+        validator: value => /^[67][05678]\d{7}$/.test(value),
+        message: 'Numéro de teléphone non valide',
+      },
     },
+
     role: {
       type: String,
       enum: ['admin', 'sub-admin', 'agent', 'client'],
-      required: [true],
+      required: [true, 'Un compte doit avoir un role'],
       default: 'client',
     },
+
     password: {
       type: String,
-      required: [true, 'Password is required'],
+      required: [true, 'Mot de passe réquis'],
     },
+
+    avatarUrl: {
+      type: String,
+      default: 'http://192.169.1.196:9090/assets/images/avatar.avif',
+    },
+
     avatarNames: [String],
+
     dob: {
       type: Date,
     },
+
     tokens: [String],
+
     resetToken: {
       type: String,
     },
@@ -64,17 +76,21 @@ const accountSchema = new mongoose.Schema(
     ip: {
       type: String,
     },
+
     signedIn: {
       type: Date,
     },
+
     signedOut: {
       type: Date,
     },
+
     verified: {
       type: Boolean,
-      required: [true, 'Verified is required'],
+      required: [true, 'Verifié est réquis'],
       default: false,
     },
+
     verificationCode: String,
 
     verificationCodeExpirationDate: Date,
@@ -87,11 +103,6 @@ const accountSchema = new mongoose.Schema(
 );
 
 // virtuals
-accountSchema.virtual('avatarUrls').get(function () {
-  return this.avatarNames.map(
-    (name) => `${process.env.CLOUDFRONT_URL}/${name}`
-  );
-});
 
 /** HOOKS */
 
@@ -109,11 +120,13 @@ accountSchema.pre('save', async function (next) {
 
   const { password } = account;
 
+  const passwordLength = password.length;
+
   console.log(password);
 
-  if (password < minlength || password > maxlength) {
+  if (passwordLength < minlength || passwordLength > maxlength) {
     return next(
-      new ServerError('Your password is either too short or too long', 400)
+      new ServerError('Ton mot de passe est soit trop petit ou trop long', 400)
     );
   }
 
@@ -181,7 +194,12 @@ accountSchema.methods.toJSON = function () {
     '__v',
     'reset_token',
     'reset_token_expiration_date',
-    'tokens'
+    'tokens',
+    'ip',
+    'verificationCode',
+    'verificationCodeExpirationDate',
+    'resetToken',
+    'resetTokenExpirationDate'
   );
   // return value will be sent to client
   return account;

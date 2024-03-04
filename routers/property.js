@@ -1,6 +1,5 @@
 import express from 'express';
 import { uploader } from '../utils';
-import offerRouter from './offer';
 import {
   fetchProperties,
   fetchProperty,
@@ -8,45 +7,43 @@ import {
   updateProperty,
   removeProperty,
   addPropertyImages,
-  removePropertyImage,
-} from '../handlers/property';
+  removePropertyImages,
+  fetchMyProperties,
+} from '../handlers/property/index';
 import { authenticate, preventUnverifiedAccounts } from '../handlers/auth';
 
 const router = express.Router();
 
-const parentRoute = '/properties';
-const childRoute = `${parentRoute}/:propertyId`;
+const properties = '/properties';
+const propertyRoute = `${properties}/:propertyId`;
 
 router
-  .route(`${parentRoute}`)
+  .route(properties)
   .get(fetchProperties)
-  .post(
-    uploader({ files: 12 }).any(),
-    authenticate(),
-    preventUnverifiedAccounts,
-    createProperty
-  );
+  .post(authenticate(), preventUnverifiedAccounts, createProperty);
+
+router.get(`${properties}/my-properties`, authenticate(), fetchMyProperties);
 
 router
-  .route(childRoute)
+  .route(propertyRoute)
   .get(fetchProperty)
   .patch(authenticate(), updateProperty)
   .delete(authenticate(), removeProperty);
 
+// add images to property
 router.post(
-  `${childRoute}/images`,
+  `${propertyRoute}/images`,
   authenticate(),
-  uploader({ files: 12 }).any(),
+  uploader({ files: 40 }).any(),
   addPropertyImages
 );
 
-router.delete(
-  `${childRoute}/images/:imageName`,
+// remove a property image
+router.post(
+  `${propertyRoute}/images/delete`,
   authenticate(),
-  removePropertyImage
+  removePropertyImages
 );
-
-router.use(`${childRoute}/offers`, offerRouter);
 
 // SYSTEM SPECIFIC ROUTES
 router

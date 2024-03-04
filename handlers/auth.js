@@ -1,6 +1,6 @@
 import { verify } from 'jsonwebtoken';
 import { ServerError } from './errors';
-import Account from '../schemas/account';
+import Account from '../schemas/account/index';
 import { catchAsyncErrors } from './errors';
 
 export const authenticate = (type = 'client') => {
@@ -9,30 +9,32 @@ export const authenticate = (type = 'client') => {
 
     const authFailError = new ServerError('You are not authenticated', 401);
     // get token
-    const token = req.headers['authorization'];
+    const token = req.cookies.token || req.headers['authorization'];
 
     // req.cookies.AUTH_TOKEN;
     console.log(token);
 
     // verify token
-    const decoded = verify(token, process.env.JWT_SECRET_KEY || 'secret');
-
-    if (!decoded) {
+    try {
+      verify(token, process.env.JWT_SECRET || 'secret');
+    } catch (error) {
       return next(authFailError);
     }
-    // system auth
-    if (type === 'system')
-      query = { tokens: token, role: { $in: ['admin', 'sub-admin', 'agent'] } };
-    // client auth
-    else if (type === 'client') query = { tokens: token, role: 'client' };
-    // unknown auth
-    else return next(authFailError);
+
+    // query will use system auth if type = 'system' & client auth otherwise
+    query =
+      type === 'system'
+        ? { tokens: token, role: { $in: ['admin', 'sub-admin', 'agent'] } }
+        : { tokens: token, role: 'client' };
 
     // find account that has role as client
     const account = await Account.findOne(query);
 
-    if (!account) return next(authFailError);
+    if (!account) {
+      return next(authFailError);
+    }
 
+    req.authenticated = true;
     req.account = account;
     req.token = token;
 

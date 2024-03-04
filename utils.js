@@ -1,35 +1,41 @@
 import multer from 'multer';
 import sharp from 'sharp';
-import { uploadToS3 } from './s3';
+import { uploadToS3 } from './services/AWS_S3/index';
 import { ServerError } from './handlers/errors';
-import uid from 'uniqid';
+import uniqid from 'uniqid';
 import { sign } from 'jsonwebtoken';
 import crypto from 'crypto';
+import fs from 'fs/promises';
+import path from 'path';
+import { booleanPointInPolygon, point, polygon } from '@turf/turf';
 
-export const objectAssign = (source, target) => {
-  if (!source || !target) {
-    return;
-  }
+export const objectAssign = (source, target, options = { mode: '' }) => {
+  if (!source || !target) return;
+
   for (let key in source) {
-    if (source[key]) target[key] = source[key];
+    //  non strict mode just assign values even falsy ones
+    if (options.mode === 'nostrict') target[key] = source[key];
+    // use strict mode
+    else {
+      if (source[key]) target[key] = source[key];
+    }
   }
 };
 
 // delete properties from a source object
-export const deleteProps = (src, ...props) => {
-  props.forEach((prop) => delete src[prop]);
-};
+export const deleteProps = (src, ...props) =>
+  props.forEach(prop => delete src[prop]);
 
 export const generateJwt = (
   id,
   expiresIn = process.env.JWT_EXPIRATION_TIME || '30d'
 ) => {
-  return sign({ id }, process.env.JWT_SECRET_KEY || 'secret', {
+  return sign({ id }, process.env.JWT_SECRET || 'secret', {
     expiresIn,
   });
 };
 
-export const uploader = (limits) => {
+export const uploader = limits => {
   limits = {
     fileSize: parseInt(process.env.MAX_IMAGE_SIZE) || 5000000,
     files: 1,
@@ -38,6 +44,7 @@ export const uploader = (limits) => {
   const storage = multer.memoryStorage();
   // filter files to only accept images
   const fileFilter = (req, file, cb) => {
+    console.log('file', file);
     const regex = /.+\/(jpg|jpeg|png|webp)$/;
 
     if (!file.mimetype.match(regex)) {
@@ -51,21 +58,26 @@ export const uploader = (limits) => {
   return multer({ storage, limits, fileFilter });
 };
 
-export const isFullHd = async (file) => {
+export const isFullHd = async file => {
   if (!file) return;
   // get image dimensions
   const { width, height } = await sharp(file.buffer).metadata();
+
   // if width & height >= FHD image passes test
-  if (width >= 1920 && height >= 1080) return true;
-  // image fails test
-  return false;
+  // if (width >= 1920 && height >= 1080) return true;
+
+  // if width or height does is not FHD+ test fails
+  if (width < 1920 || height < 1080) return { passed: false };
+
+  // test passes
+  return { passed: true, width, height };
 };
 
 export const createFileCopies = async (source, dimensions = []) => {
   if (!source) return;
 
   const copies = [];
-  const all = [source];
+  const all = [];
 
   for (let dimension of dimensions) {
     const copy = { ...source };
@@ -80,6 +92,8 @@ export const createFileCopies = async (source, dimensions = []) => {
     all.push(copy);
   }
 
+  all.push(source);
+
   return { source, copies, all };
 };
 
@@ -91,10 +105,8 @@ export const convertToWebp = async (file, quality = 100) => {
     // convert to webp
     const converted = await sharp(file.buffer).webp({ quality }).toBuffer();
 
-    console.log('file sizes: ', file.size, converted.byteLength);
     // only save converted if it's size is less than original file
     if (converted.byteLength < file.size) {
-      console.log('converted');
       file.buffer = converted;
       file.mimetype = 'images/webp';
     }
@@ -103,44 +115,55 @@ export const convertToWebp = async (file, quality = 100) => {
   return file;
 };
 
-export const uploadAvatar = async (file, account, next) => {
+export const uploadAvatar = async (file, account) => {
   if (file && account) {
     // change avatar name
-    file.originalname = `avatar-${account.id}`;
-    // check if image is at least 1920x1080(FHD)
-    const isAccepted = isFullHd(file);
+    file.originalname = `avatar-${account.id}-${uniqid()}`;
 
-    // send error if image is low quality < FHD
-    if (!isAccepted) {
-      return next(new ServerError('Please upload a high quality image', 400));
-    }
     // convert original file to webp
     const webpAvatar = await convertToWebp(file);
 
     // make copies of account avatar/profile in the given dimensions
-    const copyOutput = await createFileCopies(webpAvatar, [200, 400, 800]);
-    const avatarFiles = copyOutput.all;
+    // const copyOutput = await createFileCopies(webpAvatar, [250, 500, 800]);
+
+    webpAvatar.buffer = await sharp(webpAvatar.buffer).resize(500).toBuffer();
+
+    // only save the copies not the original
+    // const avatarFiles = copyOutput.copies;
 
     // upload files to AWS S3
-    await uploadToS3(avatarFiles);
+    // await uploadToS3(avatarFiles);
 
-    account.avatarNames = avatarFiles.map((avatar) => avatar.originalname);
+    await uploadToS3([webpAvatar]);
+
+    // const firstAvatar = avatarFiles[0];
+
+    // account.avatarUrl = `${process.env.CLOUDFRONT_URL}/${firstAvatar.originalname}`;
+
+    account.avatarUrl = `${process.env.CLOUDFRONT_URL}/${webpAvatar.originalname}`;
+
+    // update user with new image urls
+    // account.avatarNames = avatarFiles.map(avatar => avatar.originalname);
 
     await account.save();
   }
 };
 
-export const uploadPropertyImages = async (images, property, next) => {
+export const uploadPropertyImages = async (images, property) => {
   for (let image of images) {
     // rename property images
-    image.originalname = `property-img-${uid()}`;
+    image.originalname = `property-img-${uniqid()}`;
 
     // make sure images match our criterias
-    const isHighRes = await isFullHd(image);
+    const resolution = await isFullHd(image);
+
+    const isHighRes = resolution.passed;
+
+    console.log(isHighRes);
 
     // send error if images are not clear (hd)
     if (!isHighRes) {
-      return next(new ServerError('Please upload high resolution images', 400));
+      throw new ServerError('Please upload high resolution images', 400);
     }
 
     // convert property image to webp to optimize images for web use
@@ -154,6 +177,9 @@ export const uploadPropertyImages = async (images, property, next) => {
     // create smaller image versions from original image uploaded by client
     const copyOutput = await createFileCopies(webpImage, dimensions);
 
+    // rename original image to add width for responsive images
+    webpImage.originalname = `${image.originalname}-${resolution.width}`;
+
     // original image + smaller versions of image
     const imageAndCopies = copyOutput.all;
 
@@ -163,7 +189,7 @@ export const uploadPropertyImages = async (images, property, next) => {
     // save image and its different versions info to db
     const imageObject = {
       sourceName: webpImage.originalname,
-      names: imageAndCopies.map((img) => img.originalname),
+      names: imageAndCopies.map(img => img.originalname),
     };
     // add imageObject to imageNames list
     property.imagesNames.push(imageObject);
@@ -172,115 +198,11 @@ export const uploadPropertyImages = async (images, property, next) => {
   }
 };
 
-// create pages array out of a number of pages
-const createPages = (numPages) => {
-  let firstPage = 1;
-  const pages = [];
-  for (let i = firstPage; i <= numPages; i++) {
-    pages.push(i);
-  }
-  return pages;
-};
-
-export const paginateModel = async (
-  Model,
-  searchObject = {},
-  filterObject = {},
-  sortStr = '',
-  pagingInfo = { page: 1, limit: 15 },
-  // all these must be popolated
-  ...populates
-) => {
-  console.log(searchObject, filterObject, sortStr, pagingInfo);
-  // variables
-  let docs;
-  let docsCount;
-  let query;
-  // find documents length
-  const searchObjectLength = Object.values(searchObject).length;
-
-  console.log(searchObjectLength);
-
-  if (searchObjectLength) {
-    query = Model.countDocuments(searchObject).find(filterObject);
-    docsCount = await query.countDocuments();
-  } else docsCount = await Model.countDocuments(filterObject);
-
-  // get paging info
-  let page = parseInt(pagingInfo.page);
-  let limit = parseInt(pagingInfo.limit);
-
-  // sanitize user input
-  if (isNaN(page) || page < 1) page = 1;
-
-  if (isNaN(limit) || limit < 15) limit = 15;
-
-  let firstPage = 1;
-  let pages = Math.ceil(docsCount / limit);
-  let lastPage = pages;
-
-  const prevPage = firstPage < page ? page - 1 : null;
-  const nextPage = lastPage > page ? page + 1 : null;
-
-  const read = page - firstPage;
-  const toread = lastPage - page;
-
-  const skip = (page - 1) * limit;
-
-  if (searchObjectLength) {
-    query = Model.find(searchObject)
-      .find(filterObject)
-      .sort(sortStr)
-      .skip(skip)
-      .limit(limit);
-
-    populates.forEach((population) => query.populate(population));
-
-    docs = await query;
-  } else {
-    query = Model.find(filterObject).sort(sortStr).skip(skip).limit(limit);
-
-    populates.forEach((population) => query.populate(population));
-
-    docs = await query.exec();
-  }
-
-  const docsLength = docs.length;
-
-  return {
-    page,
-    pageCount: pages,
-    pages: createPages(pages),
-    nextPage,
-    prevPage,
-    read,
-    toread,
-    docs,
-    totalResults: docsCount,
-    firstPage,
-    lastPage,
-    docsLength,
-  };
-};
-
-export const sendEmail = async (content) => {
-  const transporter = nodemailer.createTransport({
-    host: 'smtp-relay.brevo.com',
-    port: 587,
-    auth: {
-      user: 'rallygene0@gmail.com',
-      pass: 'FvtRrDY5WV9hTPJn',
-    },
-  });
-
-  return await transporter.sendMail(content);
-};
-
-export const hashToken = (raw) => {
+export const hashToken = raw => {
   return crypto.createHash('sha256').update(raw).digest('hex');
 };
 
-export const setCookie = (res, name, value, options) => {
+export const setCookie = (res, name, value, options = {}) => {
   options = { maxAge: 30 * 24 * 60 * 60 * 1000, httpOnly: true, ...options };
   res.cookie(name, value, options);
 };
@@ -296,4 +218,284 @@ export const generateAccountEmail = (fn = '', ln = '') => {
 
 export const generateDfPassword = (fn = '', ln = '') => {
   return `PASS-${fn.slice(0, 2)}${ln.slice(0, 2)}`;
+};
+
+export const parseStringToBoolean = (source = {}, ...properties) => {
+  for (let property of properties) {
+    if (source[property] === 'true' || source[property] === '')
+      source[property] = true;
+
+    if (source[property] === 'false') source[property] = false;
+  }
+  return source;
+};
+
+export const formatSrset = srcSet => {
+  srcSet = !srcSet ? [] : srcSet;
+
+  let formatted = '';
+
+  const { length } = srcSet;
+
+  for (let i = 0; i < length; i++) {
+    // get current source
+    const source = srcSet[i];
+
+    // split url string by -
+    const parts = source.split('-');
+
+    // width is the last item and is a string number
+    const width = parts[parts.length - 1];
+
+    // formatted will add newly constructed string with a comma and a space if not last item
+    formatted +=
+      i < length - 1
+        ? `${parts.join('-')} ${width}w, `
+        : `${parts.join('-')} ${width}w`;
+  }
+
+  return formatted;
+};
+
+export const insideGuinea = async coordinates => {
+  if (!coordinates || coordinates.length !== 2) return false;
+
+  try {
+    // read file
+    const file = await fs.readFile(
+      path.resolve(`${__dirname}/public/assets/guinea.geojson`)
+    );
+
+    // parse file to json
+    const parsedFile = JSON.parse(file);
+
+    // get coordinates from file
+    const guineaCoordinates = parsedFile.features[0].geometry.coordinates;
+
+    const place = point(coordinates);
+
+    const area = polygon(guineaCoordinates);
+
+    return booleanPointInPolygon(place, area);
+  } catch (e) {
+    throw e;
+  }
+};
+
+const isGeoSearchAllowed = (northEastBounds, southWestBounds) => {
+  return (
+    northEastBounds &&
+    northEastBounds.length === 2 &&
+    southWestBounds &&
+    southWestBounds.length === 2
+  );
+};
+
+export const buildSearchStage = (
+  searchTerm,
+  { northEastBounds, southWestBounds }
+) => {
+  console.log('northEastBounds', northEastBounds);
+  console.log('southWestBounds', southWestBounds);
+
+  // mongodb atlas search index name
+  const index = 'main_search';
+  // check to see if the user is inside guinea's bounding box
+  const geoSearchAllowed = isGeoSearchAllowed(northEastBounds, southWestBounds);
+
+  if (!geoSearchAllowed) return;
+
+  // search stage
+  const searchStage = { $search: { index } };
+
+  // text search query
+  // const textQuery = {
+  //   query: searchTerm,
+  //   path: ['title', 'tags', 'description', 'address'],
+  //   fuzzy: {},
+  // };
+
+  // geo search query
+  const geoQuery = {
+    path: 'location',
+    box: {
+      bottomLeft: {
+        type: 'Point',
+        coordinates: southWestBounds,
+      },
+      topRight: {
+        type: 'Point',
+        coordinates: northEastBounds,
+      },
+    },
+  };
+
+  searchStage.$search.geoWithin = geoQuery;
+
+  console.log('SearchStage', searchStage);
+
+  // return built search stage based on above scenarios
+  return searchStage;
+};
+
+export const buildFilterStage = query => {
+  const filterObject = {};
+
+  const filters = [
+    'type',
+    'purpose',
+    'price',
+    'area',
+    'areaBuilt',
+    'yearBuilt',
+    'fenced',
+    'bathrooms',
+    'garages',
+    'kitchens',
+    'livingRooms',
+    'diningRooms',
+    'pools',
+    'rooms',
+  ];
+
+  for (let filter of filters) filterObject[filter] = query[filter];
+
+  const regexp = /(lte)|(gte)/g;
+
+  const filterObjectString = JSON.stringify(filterObject).replace(
+    regexp,
+    value => `$${value}`
+  );
+
+  return {
+    $match: JSON.parse(filterObjectString),
+  };
+};
+
+export const buildSortStage = string => {
+  if (!string) return;
+
+  const sortObject = {};
+
+  // -createdAt createdAt
+  const firstLetter = string[0];
+
+  if (firstLetter === '-') {
+    // copy string but exclude the -
+    const propertyName = string.slice(1);
+    // set sortObject to decending
+    sortObject[propertyName] = -1;
+  }
+  // set sortObject property to ascending
+  else sortObject[string] = 1;
+  // return stage
+
+  return {
+    $sort: sortObject,
+  };
+};
+
+export const buildLimitStage = limit => ({ $limit: limit });
+
+export const buildCountStage = fieldName => {
+  // if user doesn't pass a field name return
+  if (!fieldName || !fieldName.length) return;
+  return { $count: fieldName };
+};
+
+export const buildSkipStage = offset => ({
+  $skip: offset,
+});
+
+export const imageLookupStage = {
+  from: 'propertyImages',
+  localField: '_id',
+  foreignField: 'propertyId',
+  as: 'images',
+};
+
+export const ownerLookupStage = [
+  {
+    $lookup: {
+      from: 'accounts',
+      localField: 'ownerId',
+      foreignField: '_id',
+      as: 'owner',
+    },
+  },
+  {
+    $set: {
+      owner: { $arrayElemAt: ['$owner', 0] },
+    },
+  },
+];
+
+export const between = (num, min, max) => {
+  if (num < min) num = min;
+  if (num > max) num = max;
+  return num;
+};
+
+export const calculatePagination = (total, page = 1, limit) => {
+  // minimum limit permitted
+  const minLimit = 1;
+  // maximum limit permitted
+  const maxLimit = 200;
+  // parsed limit defaults to 50 if not provided
+  // const limitInt = parseInt(limit) || 100;
+  const limitInt = parseInt(limit) || 5;
+
+  // get limit number between min & max
+  limit = between(limitInt, minLimit, maxLimit);
+
+  const pageInt = parseInt(page) || 1;
+  // minimum page permitted
+  const firstPage = total > 0 ? 1 : 0;
+  // calculated number of pages
+  const pages = Math.ceil(total / limit);
+  // maximum page permitted
+  const lastPage = pages;
+  // get page number between min & max
+  page = between(pageInt, firstPage, lastPage);
+
+  // calculate prev
+  const prevPage = firstPage < page ? page - 1 : null;
+  // calculate next
+  const nextPage = lastPage > page ? page + 1 : null;
+
+  // calculate skip
+  let skip = (page - 1) * limit;
+
+  // make sure skip is not negative
+  skip = skip >= 0 ? skip : 0;
+
+  // return pagination info
+  return {
+    limit,
+    page,
+    pages,
+    total,
+    prevPage,
+    nextPage,
+    skip,
+  };
+};
+
+// this takes stages and exclude empty stage
+export const buildPipeline = (...stages) => stages.filter(stage => stage);
+
+export const preProcessImage = property => {
+  if (!property) return;
+
+  const { CLOUDFRONT_URL } = process.env;
+  const { imagesNames } = property;
+
+  return imagesNames.map(({ sourceName, names }) => {
+    const smallestImage = names[0];
+    return {
+      sourceName: sourceName,
+      src: `${CLOUDFRONT_URL}/${smallestImage}`,
+      srcset: formatSrset(names.map(name => `${CLOUDFRONT_URL}/${name}`)),
+    };
+  });
 };

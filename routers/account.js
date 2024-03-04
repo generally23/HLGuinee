@@ -10,14 +10,17 @@ import {
   deleteMyAccount,
   updateMyAccount,
   changeMyPassword,
+  verifyAccount,
+  sendVerficationCode,
+} from '../handlers/account/client';
+import {
   systemAdminCreateAccount,
   systemAdminPasswordChange,
   systemAdminRemoveAccount,
   systemAdminAccountUpdate,
   systemSignIn,
-  verifyAccount,
-  sendVerficationCode,
-} from '../handlers/account';
+} from '../handlers/account/system';
+
 import { uploader } from '../utils';
 
 const router = express.Router();
@@ -26,21 +29,32 @@ const parentRoute = '/accounts';
 
 const systemParentRoute = `/system${parentRoute}`;
 
-router.post(`${parentRoute}/signup`, uploader({ files: 1 }).any(), signup);
-
 /** AUTHENTICATED */
 
+router
+  .route(`${parentRoute}/my-account`)
+
+  // fetch my account
+  .get(authenticate(), getMyAccount)
+
+  // update my account
+  .patch(authenticate(), uploader().single('avatar'), updateMyAccount)
+
+  // remove my account
+  .delete(authenticate(), deleteMyAccount);
+
+// logout
 router.post(`${parentRoute}/signout`, authenticate(), signout);
 
-router.get(`${parentRoute}/my-account`, authenticate(), getMyAccount);
-
 /** NOT AUTHENTICATED */
+
+router.post(`${parentRoute}/signup`, uploader().single('avatar'), signup);
 
 router.post(`${parentRoute}/signin`, signin);
 
 router.post(`${parentRoute}/forgot-my-password`, forgotMyPassword);
 
-router.patch(`${parentRoute}/reset-password/:resetToken`, resetMyPassword);
+router.patch(`${parentRoute}/reset-my-password/:resetToken`, resetMyPassword);
 
 /** AUTHENTICATED */
 
@@ -48,19 +62,6 @@ router.patch(
   `${parentRoute}/change-my-password`,
   authenticate(),
   changeMyPassword
-);
-
-router.patch(
-  `${parentRoute}/update-my-account`,
-  authenticate(),
-  updateMyAccount
-);
-
-router.delete(
-  `${parentRoute}/delete-my-account`,
-  authenticate(),
-  allowAccessTo('client'),
-  deleteMyAccount
 );
 
 // verify account
