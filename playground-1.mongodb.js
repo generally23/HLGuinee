@@ -54,3 +54,47 @@ const countPipeline = [
 db.properties.aggregate(pipeline);
 
 // db.properties.aggregate(countPipeline);
+
+[
+  {
+    $search: {
+      index: 'main_search',
+      compound: [
+        {
+          geoWithin: {
+            path: 'location',
+            box: {
+              bottomLeft: {
+                type: 'Point',
+                coordinates: [-15.230412450491485, 7.106619720488965],
+              },
+              topRight: {
+                type: 'Point',
+                coordinates: [-12.407502186869351, 11.675722851192958],
+              },
+            },
+          },
+        },
+        {
+          sort: {
+            title: -1,
+          },
+        },
+      ],
+    },
+  },
+  {
+    $skip: 11,
+  },
+
+  {
+    $limit: 5,
+  },
+
+  {
+    $project: {
+      _id: 1,
+      price: 1,
+    },
+  },
+];

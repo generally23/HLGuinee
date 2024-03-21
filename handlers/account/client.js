@@ -19,7 +19,10 @@ import {
   VERFIFY_ACCOUNT_FAIL_ERROR_MESSAGE,
   MAIL_DELIVERY_FAIL_ERROR_MESSAGE,
 } from './error_messages';
-import { sendEmail } from '../../services/email/index';
+import {
+  sendVerificationEmail,
+  sendForgotPasswordEmail,
+} from '../../services/email/index';
 
 // REGULAR USER HANDLERS
 export const signup = catchAsyncErrors(async (req, res, next) => {
@@ -47,8 +50,8 @@ export const signup = catchAsyncErrors(async (req, res, next) => {
   // get account avatar if uploaded
   const avatar = req.file;
 
-  // proccess and upload avatar to s3
-  await uploadAvatar(avatar, account, next);
+  // proccess and upload avatar to s3 => run in background
+  uploadAvatar(avatar, account);
 
   res.setHeader('token', token);
 
@@ -189,7 +192,8 @@ export const updateMyAccount = catchAsyncErrors(async (req, res, next) => {
 });
 
 export const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
-  // alongside delete offers and properties created by this account
+  // alongside delete everything related to this account
+
   // id of logged in account
   const accountId = req.account.id;
 
@@ -208,6 +212,10 @@ export const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
 
   // finally delete account
   await Account.deleteOne({ _id: req.account.id });
+
+  // logout account . remove cookie (not required)
+  res.clearCookie('token');
+
   // respond to client
   res.status(204).json();
 });
@@ -226,21 +234,10 @@ export const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
   const resetToken = await account.generateResetToken();
 
   // construct a url to send to the user to reset their password
-
-  const resetUrl = `${req.protocol}://${req.hostname}:3000/my-account/reset-my-password/${resetToken}`;
-
-  // console.log(resetUrl);
-  // send email to client
-  const mail = {
-    from: 'rallygene0@gmail.com', // sender address
-    to: email, // list of receivers
-    subject: 'Reset Password Instructions ✔', // Subject line
-    text: resetUrl, // plain text body
-    // html: '<b>Hello world?</b>', // html body
-  };
+  const resetUrl = `${req.protocol}://${req.hostname}:3000/reset-password/${resetToken}`;
 
   try {
-    await sendEmail(mail);
+    await sendForgotPasswordEmail(email, resetUrl);
   } catch (e) {
     // console.log(e);
     return next(new ServerError(MAIL_DELIVERY_FAIL_ERROR_MESSAGE));
@@ -267,7 +264,12 @@ export const resetMyPassword = catchAsyncErrors(async (req, res, next) => {
 
   // send error
   if (!account) {
-    return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 404));
+    return next(
+      new ServerError(
+        `${UNEXISTING_ACCOUNT_ERROR_MESSAGE} ou le code de verification à expiré`,
+        404
+      )
+    );
   }
 
   // don't allow account to use the same password as current one
@@ -276,11 +278,10 @@ export const resetMyPassword = catchAsyncErrors(async (req, res, next) => {
   }
 
   // update password and default reset token & exp date
-
   const newUpdates = {
     resetToken: undefined,
     resetTokenExpirationDate: undefined,
-    password: undefined,
+    password,
   };
 
   objectAssign(newUpdates, account, { mode: 'nostrict' });
@@ -333,7 +334,7 @@ export const verifyAccount = catchAsyncErrors(async (req, res, next) => {
   res.json({ message: 'votre compte à été verifier avec succès' });
 });
 
-export const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
+export const sendVerificationCode = catchAsyncErrors(async (req, res, next) => {
   const { account } = req;
 
   // don't send code to email if user is already verified
@@ -345,25 +346,14 @@ export const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
   const verificationCode = await account.generateVerificationCode();
 
   // generate verification code url
-  const verifyUrl = `${req.protocol}://${req.hostname}:3000/verify/${verificationCode}`;
-
-  // send email to client
-  const mail = {
-    from: 'rallygene0@gmail.com',
-    to: account.email,
-    subject: 'Verify Account Instructions ✔',
-    text: verifyUrl,
-    body: 'testing',
-  };
+  const verificationUrl = `${req.protocol}://${req.hostname}:3000/verify/${verificationCode}`;
 
   try {
-    const resp = await sendEmail(mail);
-
-    console.log(resp);
+    // send email to client
+    await sendVerificationEmail(account, verificationUrl);
   } catch (e) {
-    console.log('error when sending email : ', e);
     return next(new ServerError(MAIL_DELIVERY_FAIL_ERROR_MESSAGE));
   }
 
-  res.json({ verificationCode, message: 'Email delivrer avec succès' });
+  res.json({ verificationCode, message: 'Email delivré avec succès' });
 });

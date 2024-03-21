@@ -7,6 +7,7 @@ var helmet = require('helmet');
 var cors = require('cors');
 var compress = require('compression');
 var cookieParser = require('cookie-parser');
+var dotenv = require('dotenv');
 var mongoSanitize = require('express-mongo-sanitize');
 var multer = require('multer');
 var sharp = require('sharp');
@@ -14,17 +15,26 @@ var clientS3 = require('@aws-sdk/client-s3');
 var uniqid = require('uniqid');
 var jsonwebtoken = require('jsonwebtoken');
 var crypto = require('crypto');
-require('fs/promises');
-require('@turf/turf');
+var fs = require('fs/promises');
+var turf = require('@turf/turf');
 var argon = require('argon2');
 var emailValidator = require('email-validator');
 var nodemailer = require('nodemailer');
-var dotenv = require('dotenv');
+require('resend');
+var pug = require('pug');
 var expressQueryParser = require('express-query-parser');
 
 const router$3 = express.Router();
 
 router$3.get('/', (req, res) => res.send('Welcome to my webserver'));
+
+/* 
+    Always serve the same html file since this is a single page app
+    React will handle the routing on the client
+  */
+router$3.all('*', (req, res) =>
+  res.sendFile(path.resolve(__dirname, 'public', 'index.html'))
+);
 
 const createS3Instance = () => {
   // AWS CONFIGURATION
@@ -180,9 +190,9 @@ const deleteProps = (src, ...props) =>
 
 const generateJwt = (
   id,
-  expiresIn = process.env.JWT_EXPIRATION_TIME || '30d'
+  expiresIn = process.env.JWT_EXPIRATION_TIME
 ) => {
-  return jsonwebtoken.sign({ id }, process.env.JWT_SECRET || 'secret', {
+  return jsonwebtoken.sign({ id }, process.env.JWT_SECRET, {
     expiresIn,
   });
 };
@@ -275,27 +285,12 @@ const uploadAvatar = async (file, account) => {
     // convert original file to webp
     const webpAvatar = await convertToWebp(file);
 
-    // make copies of account avatar/profile in the given dimensions
-    // const copyOutput = await createFileCopies(webpAvatar, [250, 500, 800]);
-
+    // resize image to 500px with while maintaing aspect ratio
     webpAvatar.buffer = await sharp(webpAvatar.buffer).resize(500).toBuffer();
-
-    // only save the copies not the original
-    // const avatarFiles = copyOutput.copies;
-
-    // upload files to AWS S3
-    // await uploadToS3(avatarFiles);
 
     await uploadToS3([webpAvatar]);
 
-    // const firstAvatar = avatarFiles[0];
-
-    // account.avatarUrl = `${process.env.CLOUDFRONT_URL}/${firstAvatar.originalname}`;
-
     account.avatarUrl = `${process.env.CLOUDFRONT_URL}/${webpAvatar.originalname}`;
-
-    // update user with new image urls
-    // account.avatarNames = avatarFiles.map(avatar => avatar.originalname);
 
     await account.save();
   }
@@ -399,6 +394,31 @@ const formatSrset = srcSet => {
   return formatted;
 };
 
+const insideGuinea = async coordinates => {
+  if (!coordinates || coordinates.length !== 2) return false;
+
+  try {
+    // read file
+    const file = await fs.readFile(
+      path.resolve(`${__dirname}/public/assets/guinea.geojson`)
+    );
+
+    // parse file to json
+    const parsedFile = JSON.parse(file);
+
+    // get coordinates from file
+    const guineaCoordinates = parsedFile.features[0].geometry.coordinates;
+
+    const place = turf.point(coordinates);
+
+    const area = turf.polygon(guineaCoordinates);
+
+    return turf.booleanPointInPolygon(place, area);
+  } catch (e) {
+    throw e;
+  }
+};
+
 const isGeoSearchAllowed = (northEastBounds, southWestBounds) => {
   return (
     northEastBounds &&
@@ -449,8 +469,6 @@ const buildSearchStage = (
 
   searchStage.$search.geoWithin = geoQuery;
 
-  console.log('SearchStage', searchStage);
-
   // return built search stage based on above scenarios
   return searchStage;
 };
@@ -489,27 +507,40 @@ const buildFilterStage = query => {
   };
 };
 
-const buildSortStage = string => {
-  if (!string) return;
+// export const buildSortStage = string => {
+//   if (!string) return;
 
-  const sortObject = {};
+//   const sortObject = {};
 
-  // -createdAt createdAt
-  const firstLetter = string[0];
+//   // -createdAt createdAt
+//   if (string.startsWith('-')) {
+//     // copy string but exclude the -
 
-  if (firstLetter === '-') {
-    // copy string but exclude the -
-    const propertyName = string.slice(1);
-    // set sortObject to decending
-    sortObject[propertyName] = -1;
-  }
-  // set sortObject property to ascending
-  else sortObject[string] = 1;
-  // return stage
+//     const propertyName = string.slice(1);
 
-  return {
-    $sort: sortObject,
-  };
+//     // set sortObject to decending
+//     sortObject[propertyName] = -1;
+//   }
+//   // set sortObject property to ascending
+//   else sortObject[string] = 1;
+//   // return stage
+
+//   return {
+//     $sort: { ...sortObject },
+//   };
+// };
+
+const buildSortStage = sortBy => {
+  if (!sortBy || typeof sortBy !== 'string') return;
+
+  // use _id as a separator when sort ties
+  const ascSort = { [sortBy]: 1, _id: -1 };
+
+  const descSort = { [sortBy.slice(1)]: -1, _id: -1 };
+
+  if (sortBy.startsWith('-')) return { $sort: descSort };
+
+  return { $sort: ascSort };
 };
 
 const ownerLookupStage = [
@@ -528,50 +559,33 @@ const ownerLookupStage = [
   },
 ];
 
-const between = (num, min, max) => {
-  if (num < min) num = min;
-  if (num > max) num = max;
-  return num;
-};
+const calculatePagination = (total, page = 1, limit = 5) => {
+  // Minimum and maximum limits permitted
+  const MIN_LIMIT = 1;
+  const MAX_LIMIT = 5;
 
-const calculatePagination = (total, page = 1, limit) => {
-  // minimum limit permitted
-  const minLimit = 1;
-  // maximum limit permitted
-  const maxLimit = 200;
-  // parsed limit defaults to 50 if not provided
-  // const limitInt = parseInt(limit) || 100;
-  const limitInt = parseInt(limit) || 5;
+  // Parse limit to integer and ensure it's within limits
+  const parsedLimit = Math.min(Math.max(parseInt(limit), MIN_LIMIT), MAX_LIMIT);
 
-  // get limit number between min & max
-  limit = between(limitInt, minLimit, maxLimit);
+  // Parse page to integer and ensure it's within limits
+  const parsedPage = Math.max(1, parseInt(page));
 
-  const pageInt = parseInt(page) || 1;
-  // minimum page permitted
-  const firstPage = total > 0 ? 1 : 0;
-  // calculated number of pages
-  const pages = Math.ceil(total / limit);
-  // maximum page permitted
-  const lastPage = pages;
-  // get page number between min & max
-  page = between(pageInt, firstPage, lastPage);
+  // Calculate number of pages
+  const totalPages = Math.ceil(total / parsedLimit);
 
-  // calculate prev
-  const prevPage = firstPage < page ? page - 1 : null;
-  // calculate next
-  const nextPage = lastPage > page ? page + 1 : null;
+  // Calculate previous page number
+  const prevPage = parsedPage > 1 ? parsedPage - 1 : null;
 
-  // calculate skip
-  let skip = (page - 1) * limit;
+  // Calculate next page number
+  const nextPage = parsedPage < totalPages ? parsedPage + 1 : null;
 
-  // make sure skip is not negative
-  skip = skip >= 0 ? skip : 0;
+  // Calculate skip (offset)
+  const skip = Math.max(0, (parsedPage - 1) * parsedLimit);
 
-  // return pagination info
   return {
-    limit,
-    page,
-    pages,
+    limit: parsedLimit,
+    page: parsedPage,
+    pages: totalPages,
     total,
     prevPage,
     nextPage,
@@ -608,6 +622,7 @@ const locationSchema = new mongoose.Schema({
     },
     default: 'Point',
   },
+
   coordinates: {
     type: [Number],
     required: [true, 'Un bien doit avoir des coordonées GPS'],
@@ -638,29 +653,26 @@ const imageSchema = new mongoose.Schema({
 
 const price = {
   type: Number,
-  required: [true, 'A property needs a price'],
+  required: [true, 'Un bien doit avoir un prix'],
   validate: [
     {
       validator: function () {
         const { purpose, price } = this;
 
-        return (
-          (purpose === 'rent' && price >= 100000) ||
-          (purpose === 'sell' && price >= 10000000)
-        );
-      },
-      message: 'A property price cannot be less than this amount',
-    },
-    {
-      validator: function () {
-        const { purpose, price } = this;
+        const rentMin = 100_000;
+        const rentMax = 10_000_000;
 
-        return (
-          (purpose === 'rent' && price <= 10000000) ||
-          (purpose === 'sell' && price <= 900000000000)
-        );
+        const buyMin = 10_000_000;
+        const buyMax = 900_000_000_000;
+
+        if (purpose === 'rent') return price >= rentMin && price <= rentMax;
+
+        if (purpose === 'sell') return price >= buyMin && price <= buyMax;
+
+        return false;
       },
-      message: 'A property price cannot exceed this amount',
+      message:
+        "Le prix d'un bien doit être entre 100.000FG et 10.000.000FG pour les maisons à louer et 10.000.000FG à 900.000.000.000FG pour les biens à vendre",
     },
   ],
 };
@@ -943,10 +955,12 @@ propertySchema.virtual('images').get(function () {
 
 // methods
 propertySchema.methods.toJSON = function () {
-  // account clone
+  // property clone
   const property = this.toObject();
+
   // remove props from user object
   deleteProps(property, 'imagesNames', '__v');
+
   // return value will be sent to client
   return property;
 };
@@ -955,6 +969,9 @@ const Property = mongoose.model('Property', propertySchema);
 
 const NO_LOCATION_ERROR_MESSAGE =
   'Vous ne pouvez pas poster un bien sans ';
+
+const LOCATION_INVALID_ERROR_MESSAGE =
+  'Cannot create a property outside of Guinea';
 
 const PROPERTY_NOTFOUND_ERROR_MESSAGE =
   'This property does not exist on our server';
@@ -980,7 +997,7 @@ const fetchProperties = catchAsyncErrors(async (req, res, next) => {
       : south_west_bounds,
   };
 
-  console.log('User Location: ', userLocation);
+  // console.log('User Location: ', userLocation);
 
   // request queries
   const { search, sortBy, limit, page } = req.query;
@@ -991,24 +1008,18 @@ const fetchProperties = catchAsyncErrors(async (req, res, next) => {
   // filter stage
   const filterStage = buildFilterStage(req.query);
 
-  // get properties count
-  const countPipeline = buildPipeline(searchStage, filterStage);
+  // sort stage
+  const sortStage = buildSortStage(sortBy);
 
-  const countResults = await Property.aggregate(countPipeline).count('total');
+  const pipeline = buildPipeline(searchStage, filterStage, sortStage);
+
+  // get properties count
+  const countResults = await Property.aggregate(pipeline).count('total');
 
   const propertyCount = countResults.length ? countResults[0].total : 0;
 
-  console.log('Property count: ', propertyCount);
-
   // get pagination info
   const pagination = calculatePagination(propertyCount, page, limit);
-
-  console.log(pagination);
-
-  // sort stage
-  const sortObject = buildSortStage(sortBy);
-
-  const pipeline = buildPipeline(searchStage, filterStage, sortObject);
 
   const properties = await Property.aggregate(pipeline)
 
@@ -1024,9 +1035,9 @@ const fetchProperties = catchAsyncErrors(async (req, res, next) => {
     delete property.imagesNames;
   });
 
-  console.log('Filters: ', filterStage);
-  // console.log('Filter Stage: ', filterStage);
-  console.log('Sort Object: ', sortObject);
+  // console.log('Filters: ', filterStage);
+
+  // console.log('Sort Object: ', sortStage);
 
   res.json({ ...pagination, properties });
 });
@@ -1038,9 +1049,12 @@ const createProperty = catchAsyncErrors(async (req, res, next) => {
   if (!location) return next(new ServerError(NO_LOCATION_ERROR_MESSAGE, 400));
 
   // check to see if coordinates are in Guinea
-  const fullyInGuinea = true; // await insideGuinea(location.coordinates);
+  const fullyInGuinea = await insideGuinea(location.coordinates);
 
-  console.log('In Guinea ?: ', fullyInGuinea);
+  // console.log('In Guinea ?: ', fullyInGuinea);
+
+  if (!fullyInGuinea)
+    return next(new ServerError(LOCATION_INVALID_ERROR_MESSAGE, 400));
 
   // create new property
   const property = new Property(req.body);
@@ -1053,7 +1067,7 @@ const createProperty = catchAsyncErrors(async (req, res, next) => {
   const promoStartDate = parseInt(process.env.PROMO_START_DATE);
 
   // promo is still running
-  if (promoStartDate + promoPeriod > Date.now()) property.published = true;
+  if (promoStartDate + promoPeriod > Date.now()) property.status = 'listed';
 
   // associate property to it's owner
   property.ownerId = req.account.id;
@@ -1115,19 +1129,19 @@ const removeProperty = catchAsyncErrors(async (req, res, next) => {
   // only property owner and admin allowed accounts can delete
   const allowedAccounts = ['admin', 'sub-admin', 'agent'];
 
-  const sameAccount = property.ownerId.equals(req.account.id);
+  const isOwner = property.ownerId.equals(req.account.id);
+
   const isAllowed = allowedAccounts.includes(req.account.role);
 
-  console.log('Same account: ', property.ownerId.equals(req.account.id));
+  // console.log('Same account: ', property.ownerId.equals(req.account.id));
 
-  console.log('Allowed: ', allowedAccounts.includes(req.account.role));
+  // console.log('Allowed: ', allowedAccounts.includes(req.account.role));
 
-  if (!sameAccount || (!sameAccount && !isAllowed)) {
+  if (!isOwner || (!isOwner && !isAllowed)) {
     return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
   }
 
   // delete all images of property from s3
-
   const images = property.imagesNames;
 
   for (let image of images) {
@@ -1158,7 +1172,7 @@ const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
   const uploadedImages = req.files || [];
 
   // maximum number of images allowed for a single property
-  const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 40;
+  const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 30;
 
   if (
     propertyImagesLength >= maxImagesLength ||
@@ -1167,14 +1181,13 @@ const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
     return next(new ServerError(MAX_IMAGE_ALLOWED_ERROR_MESSAGE, 400));
   }
 
+  res.json(property);
+
   /* 
     run this in the background
     don't wait for this to finish before responding to client for better UI exp
   */
-
   uploadPropertyImages(uploadedImages, property);
-
-  res.json(property);
 });
 
 const removePropertyImages = catchAsyncErrors(async (req, res, next) => {
@@ -1198,9 +1211,9 @@ const removePropertyImages = catchAsyncErrors(async (req, res, next) => {
 
   // allow only owner and admin to delete image
 
-  if (!property.ownerId.equals(account.id)) {
-    return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
-  }
+  const isOwner = property.ownerId.equals(account.id);
+
+  if (!isOwner) return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
 
   // imageNames
   const { imagesNames } = property;
@@ -1212,14 +1225,14 @@ const removePropertyImages = catchAsyncErrors(async (req, res, next) => {
     );
 
     if (image) {
-      // remove image and all it's duplicates from s3
-      // run this in the background to save time of response
-      removeFroms3(image.names);
-
       // remove image info from db
       property.imagesNames = property.imagesNames.filter(
         imageObject => imageObject.sourceName !== imageName
       );
+
+      // remove image and all it's duplicates from s3
+      // run this in the background to save time of response
+      removeFroms3(image.names);
     }
   }
 
@@ -1439,11 +1452,11 @@ const authenticate = (type = 'client') => {
     const token = req.cookies.token || req.headers['authorization'];
 
     // req.cookies.AUTH_TOKEN;
-    console.log(token);
+    // console.log(token);
 
     // verify token
     try {
-      jsonwebtoken.verify(token, process.env.JWT_SECRET || 'secret');
+      jsonwebtoken.verify(token, process.env.JWT_SECRET);
     } catch (error) {
       return next(authFailError);
     }
@@ -1471,14 +1484,14 @@ const authenticate = (type = 'client') => {
 
 const allowAccessTo = (...roles) => {
   return (req, res, next) => {
-    if (!roles.includes(req.account.role)) {
+    if (!roles.includes(req.account.role))
       return next(
         new ServerError(
           'You do not have enough credentials to access or perform these actions',
           403
         )
       );
-    }
+
     next();
   };
 };
@@ -1487,14 +1500,13 @@ const preventUnverifiedAccounts = catchAsyncErrors(
   async (req, res, next) => {
     const { account } = req;
 
-    if (!account.verified) {
+    if (!account.verified)
       return next(
         new ServerError(
           'Please verify your account to access this ressource',
           403
         )
       );
-    }
 
     next();
   }
@@ -1553,7 +1565,7 @@ const VERFIFY_ACCOUNT_FAIL_ERROR_MESSAGE = `Malheureusement, nous n'avions pas p
 
 const MAIL_DELIVERY_FAIL_ERROR_MESSAGE = `Malheuresement notre service email n'a pas pu vous délivrer l'email`;
 
-const sendEmail = content => {
+const getEmailTransporter = () => {
   const { SMTP_HOSTNAME, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD } =
     process.env;
 
@@ -1566,47 +1578,69 @@ const sendEmail = content => {
     },
   });
 
-  return transporter.sendMail(content);
+  return transporter;
 };
 
-// export const sendEmail = content => {
-//   let attempts = 0;
-//   let maxAttempts = 3;
-//   let timeout = 0;
+const getHTMLTemplate = (templateName, locals) => {
+  const templatePath = path.resolve(
+    __dirname,
+    'services',
+    'email',
+    'templates',
+    templateName
+  );
 
-//   const { SMTP_HOSTNAME, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD } =
-//     process.env;
+  try {
+    return pug.renderFile(templatePath, locals);
+  } catch (e) {
+    return '';
+  }
+};
 
-//   const transporter = nodemailer.createTransport({
-//     host: SMTP_HOSTNAME,
-//     port: SMTP_PORT,
-//     auth: {
-//       user: SMTP_USERNAME,
-//       pass: SMTP_PASSWORD,
-//     },
-//   });
+// import { render } from '@react-email/render';
+// import { ResetPasswordComponent } from './templates/reset-password';
 
-//   return new Promise((resolve, reject) => {
-//     const sender = async () => {
-//       attempts++;
+const createEmail = (to, subject = '', text = '', html = '') => {
+  return {
+    from: process.env.SERVER_EMAIL,
+    to,
+    subject,
+    text,
+    html,
+  };
+};
 
-//       console.log('I am sending the email ', attempts);
+const sendEmail = async email => {
+  const transporter = getEmailTransporter();
 
-//       if (attempts >= maxAttempts) return reject('failed to send mail');
+  return transporter.sendMail(email);
+};
 
-//       try {
-//         await transporter.sendMail(content);
+const sendVerificationEmail = async (emailAddress, verificationUrl) => {
+  // send email to client
+  const subject = 'Verifiez votre compte';
 
-//         resolve('sent');
-//       } catch (error) {
-//         timeout += 1000;
-//         setTimeout(sender, timeout);
-//       }
-//     };
+  const to = emailAddress;
 
-//     return sender();
-//   });
-// };
+  const html = getHTMLTemplate('verification.pug', { verificationUrl });
+
+  const email = createEmail(to, subject, '', html);
+
+  return sendEmail(email);
+};
+
+const sendForgotPasswordEmail = async (receiverEmail, resetUrl) => {
+  const subject = 'Reset Password Instructions ✔';
+
+  // const html = getHTMLTemplate('reset-password.pug', { resetUrl });
+
+  const html = render(ResetPasswordComponent({ resetUrl }));
+
+  // send email to client
+  const email = createEmail(receiverEmail, subject, '', html);
+
+  return sendEmail(email);
+};
 
 // REGULAR USER HANDLERS
 const signup = catchAsyncErrors(async (req, res, next) => {
@@ -1634,8 +1668,8 @@ const signup = catchAsyncErrors(async (req, res, next) => {
   // get account avatar if uploaded
   const avatar = req.file;
 
-  // proccess and upload avatar to s3
-  await uploadAvatar(avatar, account);
+  // proccess and upload avatar to s3 => run in background
+  uploadAvatar(avatar, account);
 
   res.setHeader('token', token);
 
@@ -1776,7 +1810,8 @@ const updateMyAccount = catchAsyncErrors(async (req, res, next) => {
 });
 
 const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
-  // alongside delete offers and properties created by this account
+  // alongside delete everything related to this account
+
   // id of logged in account
   const accountId = req.account.id;
 
@@ -1795,6 +1830,10 @@ const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
 
   // finally delete account
   await Account.deleteOne({ _id: req.account.id });
+
+  // logout account . remove cookie (not required)
+  res.clearCookie('token');
+
   // respond to client
   res.status(204).json();
 });
@@ -1813,21 +1852,10 @@ const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
   const resetToken = await account.generateResetToken();
 
   // construct a url to send to the user to reset their password
-
-  const resetUrl = `${req.protocol}://${req.hostname}:3000/my-account/reset-my-password/${resetToken}`;
-
-  // console.log(resetUrl);
-  // send email to client
-  const mail = {
-    from: 'rallygene0@gmail.com', // sender address
-    to: email, // list of receivers
-    subject: 'Reset Password Instructions ✔', // Subject line
-    text: resetUrl, // plain text body
-    // html: '<b>Hello world?</b>', // html body
-  };
+  const resetUrl = `${req.protocol}://${req.hostname}:3000/reset-password/${resetToken}`;
 
   try {
-    await sendEmail(mail);
+    await sendForgotPasswordEmail(email, resetUrl);
   } catch (e) {
     // console.log(e);
     return next(new ServerError(MAIL_DELIVERY_FAIL_ERROR_MESSAGE));
@@ -1854,7 +1882,12 @@ const resetMyPassword = catchAsyncErrors(async (req, res, next) => {
 
   // send error
   if (!account) {
-    return next(new ServerError(UNEXISTING_ACCOUNT_ERROR_MESSAGE, 404));
+    return next(
+      new ServerError(
+        `${UNEXISTING_ACCOUNT_ERROR_MESSAGE} ou le code de verification à expiré`,
+        404
+      )
+    );
   }
 
   // don't allow account to use the same password as current one
@@ -1863,11 +1896,10 @@ const resetMyPassword = catchAsyncErrors(async (req, res, next) => {
   }
 
   // update password and default reset token & exp date
-
   const newUpdates = {
     resetToken: undefined,
     resetTokenExpirationDate: undefined,
-    password: undefined,
+    password,
   };
 
   objectAssign(newUpdates, account, { mode: 'nostrict' });
@@ -1920,7 +1952,7 @@ const verifyAccount = catchAsyncErrors(async (req, res, next) => {
   res.json({ message: 'votre compte à été verifier avec succès' });
 });
 
-const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
+const sendVerificationCode = catchAsyncErrors(async (req, res, next) => {
   const { account } = req;
 
   // don't send code to email if user is already verified
@@ -1932,27 +1964,16 @@ const sendVerficationCode = catchAsyncErrors(async (req, res, next) => {
   const verificationCode = await account.generateVerificationCode();
 
   // generate verification code url
-  const verifyUrl = `${req.protocol}://${req.hostname}:3000/verify/${verificationCode}`;
-
-  // send email to client
-  const mail = {
-    from: 'rallygene0@gmail.com',
-    to: account.email,
-    subject: 'Verify Account Instructions ✔',
-    text: verifyUrl,
-    body: 'testing',
-  };
+  const verificationUrl = `${req.protocol}://${req.hostname}:3000/verify/${verificationCode}`;
 
   try {
-    const resp = await sendEmail(mail);
-
-    console.log(resp);
+    // send email to client
+    await sendVerificationEmail(account, verificationUrl);
   } catch (e) {
-    console.log('error when sending email : ', e);
     return next(new ServerError(MAIL_DELIVERY_FAIL_ERROR_MESSAGE));
   }
 
-  res.json({ verificationCode, message: 'Email delivrer avec succès' });
+  res.json({ verificationCode, message: 'Email delivré avec succès' });
 });
 
 // SYSTEM ROUTE HANDLERS
@@ -2131,7 +2152,7 @@ router$1.get(`${parentRoute}/verify/:code`, authenticate(), verifyAccount);
 router$1.get(
   `${parentRoute}/verification-code`,
   authenticate(),
-  sendVerficationCode
+  sendVerificationCode
 );
 
 // SYSTEM ROUTES
@@ -2187,6 +2208,9 @@ router.use('/', router$2);
 // Handle 404 Not found
 router.all('/*', unroutable);
 
+// configure  environment variables
+dotenv.config();
+
 // start db connection
 const connectToDb = async () => {
   try {
@@ -2236,11 +2260,14 @@ const connectToDb = async () => {
   }
 };
 
+const cacheJsFiles = (res, path) => {
+  if (!path.endsWith('.js')) return;
+  // Enable caching for all javascript files.
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+};
+
 // setup all middleware functions
 const setupExpressMiddleware = server => {
-  // setup environment variables
-  dotenv.config();
-
   // parse json
   server.use(express.json());
 
@@ -2271,19 +2298,20 @@ const setupExpressMiddleware = server => {
   server.use(helmet());
 
   // serve static files
-  server.use(express.static(path.resolve(__dirname, 'public')));
+  server.use(
+    express.static(path.resolve(__dirname, 'public'), {
+      setHeaders: cacheJsFiles,
+    })
+  );
 
-  // sanitize every source of user input
-  // Request Body, URL Parameters, URL Query Parameters
+  // sanitize every source of user input (body, params, req params)
   server.use(mongoSanitize());
-
-  // server.get('api./subdomain', (req, res) => res.send('Test working...'));
-
-  // WEB SERVER ROUTES
-  server.use('/', router$3);
 
   // API ROUTES
   server.use('/api/v1', router);
+
+  // WEB SERVER ROUTES
+  // server.use('*', SERVER_ROUTER);
 
   /* 
     Always serve the same html file since this is a single page app
@@ -2304,20 +2332,18 @@ const listen = async (
 ) => {
   try {
     await server.listen(port, console.log);
-
-    console.log('listening on port 9090');
-
     console.clear();
   } catch (error) {
+    console.log('failing to listen on port 9090', error);
+
     // we must able to listen for connection on this port shutdown server
-    console.log('failing to listen on port 9090');
     process.exit();
   }
 };
 
 const server = express();
 
-express();
+// const maintenanceServer = express();
 
 // setup express middlewares
 setupExpressMiddleware(server);
@@ -2330,5 +2356,3 @@ listen(server);
 
 // when server is under maintainance shut it down and use maintenance server
 // listen(maintenanceServer);
-
-console.clear();

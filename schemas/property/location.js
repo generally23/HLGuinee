@@ -10,6 +10,7 @@ export const locationSchema = new Schema({
     },
     default: 'Point',
   },
+
   coordinates: {
     type: [Number],
     required: [true, 'Un bien doit avoir des coordonées GPS'],

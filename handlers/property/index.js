@@ -36,7 +36,7 @@ export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
       : south_west_bounds,
   };
 
-  console.log('User Location: ', userLocation);
+  // console.log('User Location: ', userLocation);
 
   // request queries
   const { search, sortBy, limit, page } = req.query;
@@ -47,24 +47,18 @@ export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
   // filter stage
   const filterStage = buildFilterStage(req.query);
 
-  // get properties count
-  const countPipeline = buildPipeline(searchStage, filterStage);
+  // sort stage
+  const sortStage = buildSortStage(sortBy);
 
-  const countResults = await Property.aggregate(countPipeline).count('total');
+  const pipeline = buildPipeline(searchStage, filterStage, sortStage);
+
+  // get properties count
+  const countResults = await Property.aggregate(pipeline).count('total');
 
   const propertyCount = countResults.length ? countResults[0].total : 0;
 
-  console.log('Property count: ', propertyCount);
-
   // get pagination info
   const pagination = calculatePagination(propertyCount, page, limit);
-
-  console.log(pagination);
-
-  // sort stage
-  const sortObject = buildSortStage(sortBy);
-
-  const pipeline = buildPipeline(searchStage, filterStage, sortObject);
 
   const properties = await Property.aggregate(pipeline)
 
@@ -80,9 +74,9 @@ export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
     delete property.imagesNames;
   });
 
-  console.log('Filters: ', filterStage);
-  // console.log('Filter Stage: ', filterStage);
-  console.log('Sort Object: ', sortObject);
+  // console.log('Filters: ', filterStage);
+
+  // console.log('Sort Object: ', sortStage);
 
   res.json({ ...pagination, properties });
 });
@@ -94,9 +88,9 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
   if (!location) return next(new ServerError(NO_LOCATION_ERROR_MESSAGE, 400));
 
   // check to see if coordinates are in Guinea
-  const fullyInGuinea = true; // await insideGuinea(location.coordinates);
+  const fullyInGuinea = await insideGuinea(location.coordinates);
 
-  console.log('In Guinea ?: ', fullyInGuinea);
+  // console.log('In Guinea ?: ', fullyInGuinea);
 
   if (!fullyInGuinea)
     return next(new ServerError(LOCATION_INVALID_ERROR_MESSAGE, 400));
@@ -112,7 +106,7 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
   const promoStartDate = parseInt(process.env.PROMO_START_DATE);
 
   // promo is still running
-  if (promoStartDate + promoPeriod > Date.now()) property.published = true;
+  if (promoStartDate + promoPeriod > Date.now()) property.status = 'listed';
 
   // associate property to it's owner
   property.ownerId = req.account.id;
@@ -174,19 +168,19 @@ export const removeProperty = catchAsyncErrors(async (req, res, next) => {
   // only property owner and admin allowed accounts can delete
   const allowedAccounts = ['admin', 'sub-admin', 'agent'];
 
-  const sameAccount = property.ownerId.equals(req.account.id);
+  const isOwner = property.ownerId.equals(req.account.id);
+
   const isAllowed = allowedAccounts.includes(req.account.role);
 
-  console.log('Same account: ', property.ownerId.equals(req.account.id));
+  // console.log('Same account: ', property.ownerId.equals(req.account.id));
 
-  console.log('Allowed: ', allowedAccounts.includes(req.account.role));
+  // console.log('Allowed: ', allowedAccounts.includes(req.account.role));
 
-  if (!sameAccount || (!sameAccount && !isAllowed)) {
+  if (!isOwner || (!isOwner && !isAllowed)) {
     return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
   }
 
   // delete all images of property from s3
-
   const images = property.imagesNames;
 
   for (let image of images) {
@@ -217,7 +211,7 @@ export const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
   const uploadedImages = req.files || [];
 
   // maximum number of images allowed for a single property
-  const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 40;
+  const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 30;
 
   if (
     propertyImagesLength >= maxImagesLength ||
@@ -226,14 +220,13 @@ export const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
     return next(new ServerError(MAX_IMAGE_ALLOWED_ERROR_MESSAGE, 400));
   }
 
+  res.json(property);
+
   /* 
     run this in the background
     don't wait for this to finish before responding to client for better UI exp
   */
-
   uploadPropertyImages(uploadedImages, property);
-
-  res.json(property);
 });
 
 export const removePropertyImages = catchAsyncErrors(async (req, res, next) => {
@@ -257,9 +250,9 @@ export const removePropertyImages = catchAsyncErrors(async (req, res, next) => {
 
   // allow only owner and admin to delete image
 
-  if (!property.ownerId.equals(account.id)) {
-    return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
-  }
+  const isOwner = property.ownerId.equals(account.id);
+
+  if (!isOwner) return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
 
   // imageNames
   const { imagesNames } = property;
@@ -271,14 +264,14 @@ export const removePropertyImages = catchAsyncErrors(async (req, res, next) => {
     );
 
     if (image) {
-      // remove image and all it's duplicates from s3
-      // run this in the background to save time of response
-      removeFroms3(image.names);
-
       // remove image info from db
       property.imagesNames = property.imagesNames.filter(
         imageObject => imageObject.sourceName !== imageName
       );
+
+      // remove image and all it's duplicates from s3
+      // run this in the background to save time of response
+      removeFroms3(image.names);
     }
   }
 

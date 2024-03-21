@@ -11,7 +11,7 @@ import {
   updateMyAccount,
   changeMyPassword,
   verifyAccount,
-  sendVerficationCode,
+  sendVerificationCode,
 } from '../handlers/account/client';
 import {
   systemAdminCreateAccount,
@@ -71,7 +71,7 @@ router.get(`${parentRoute}/verify/:code`, authenticate(), verifyAccount);
 router.get(
   `${parentRoute}/verification-code`,
   authenticate(),
-  sendVerficationCode
+  sendVerificationCode
 );
 
 // SYSTEM ROUTES

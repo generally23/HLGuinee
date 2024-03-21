@@ -12,11 +12,11 @@ export const authenticate = (type = 'client') => {
     const token = req.cookies.token || req.headers['authorization'];
 
     // req.cookies.AUTH_TOKEN;
-    console.log(token);
+    // console.log(token);
 
     // verify token
     try {
-      verify(token, process.env.JWT_SECRET || 'secret');
+      verify(token, process.env.JWT_SECRET);
     } catch (error) {
       return next(authFailError);
     }
@@ -44,14 +44,14 @@ export const authenticate = (type = 'client') => {
 
 export const allowAccessTo = (...roles) => {
   return (req, res, next) => {
-    if (!roles.includes(req.account.role)) {
+    if (!roles.includes(req.account.role))
       return next(
         new ServerError(
           'You do not have enough credentials to access or perform these actions',
           403
         )
       );
-    }
+
     next();
   };
 };
@@ -60,14 +60,13 @@ export const preventUnverifiedAccounts = catchAsyncErrors(
   async (req, res, next) => {
     const { account } = req;
 
-    if (!account.verified) {
+    if (!account.verified)
       return next(
         new ServerError(
           'Please verify your account to access this ressource',
           403
         )
       );
-    }
 
     next();
   }

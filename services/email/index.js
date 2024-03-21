@@ -1,56 +1,64 @@
-import nodemailer from 'nodemailer';
+// import { render } from '@react-email/render';
+import { getEmailTransporter, getMailService } from './setup';
+import { getHTMLTemplate } from './templates/index';
+// import { ResetPasswordComponent } from './templates/reset-password';
 
-export const sendEmail = content => {
-  const { SMTP_HOSTNAME, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD } =
-    process.env;
-
-  const transporter = nodemailer.createTransport({
-    host: SMTP_HOSTNAME,
-    port: SMTP_PORT,
-    auth: {
-      user: SMTP_USERNAME,
-      pass: SMTP_PASSWORD,
-    },
-  });
-
-  return transporter.sendMail(content);
+const createEmail = (to, subject = '', text = '', html = '') => {
+  return {
+    from: process.env.SERVER_EMAIL,
+    to,
+    subject,
+    text,
+    html,
+  };
 };
 
-// export const sendEmail = content => {
-//   let attempts = 0;
-//   let maxAttempts = 3;
-//   let timeout = 0;
+export const sendEmail = async email => {
+  const transporter = getEmailTransporter();
 
-//   const { SMTP_HOSTNAME, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD } =
-//     process.env;
+  return transporter.sendMail(email);
 
-//   const transporter = nodemailer.createTransport({
-//     host: SMTP_HOSTNAME,
-//     port: SMTP_PORT,
-//     auth: {
-//       user: SMTP_USERNAME,
-//       pass: SMTP_PASSWORD,
-//     },
-//   });
+  const mailService = getMailService();
+};
 
-//   return new Promise((resolve, reject) => {
-//     const sender = async () => {
-//       attempts++;
+export const sendWelcomeEmail = account => {
+  // generate template from account data
+  const welcomeTemplate = getHTMLTemplate('welcome.pug', { account });
 
-//       console.log('I am sending the email ', attempts);
+  // send email to client
+  const mail = {
+    // from: 'rallygene0@gmail.com',
+    to: account.email,
+    subject: 'Verify Account Instructions ✔',
+    html: welcomeTemplate,
+  };
 
-//       if (attempts >= maxAttempts) return reject('failed to send mail');
+  // use mail service to send email
+  sendEmail(mail);
+};
 
-//       try {
-//         await transporter.sendMail(content);
+export const sendVerificationEmail = async (emailAddress, verificationUrl) => {
+  // send email to client
+  const subject = 'Verifiez votre compte';
 
-//         resolve('sent');
-//       } catch (error) {
-//         timeout += 1000;
-//         setTimeout(sender, timeout);
-//       }
-//     };
+  const to = emailAddress;
 
-//     return sender();
-//   });
-// };
+  const html = getHTMLTemplate('verification.pug', { verificationUrl });
+
+  const email = createEmail(to, subject, '', html);
+
+  return sendEmail(email);
+};
+
+export const sendForgotPasswordEmail = async (receiverEmail, resetUrl) => {
+  const subject = 'Reset Password Instructions ✔';
+
+  // const html = getHTMLTemplate('reset-password.pug', { resetUrl });
+
+  const html = render(ResetPasswordComponent({ resetUrl }));
+
+  // send email to client
+  const email = createEmail(receiverEmail, subject, '', html);
+
+  return sendEmail(email);
+};

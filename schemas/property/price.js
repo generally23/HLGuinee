@@ -1,28 +1,25 @@
 export const price = {
   type: Number,
-  required: [true, 'A property needs a price'],
+  required: [true, 'Un bien doit avoir un prix'],
   validate: [
     {
       validator: function () {
         const { purpose, price } = this;
 
-        return (
-          (purpose === 'rent' && price >= 100000) ||
-          (purpose === 'sell' && price >= 10000000)
-        );
-      },
-      message: 'A property price cannot be less than this amount',
-    },
-    {
-      validator: function () {
-        const { purpose, price } = this;
+        const rentMin = 100_000;
+        const rentMax = 10_000_000;
 
-        return (
-          (purpose === 'rent' && price <= 10000000) ||
-          (purpose === 'sell' && price <= 900000000000)
-        );
+        const buyMin = 10_000_000;
+        const buyMax = 900_000_000_000;
+
+        if (purpose === 'rent') return price >= rentMin && price <= rentMax;
+
+        if (purpose === 'sell') return price >= buyMin && price <= buyMax;
+
+        return false;
       },
-      message: 'A property price cannot exceed this amount',
+      message:
+        "Le prix d'un bien doit être entre 100.000FG et 10.000.000FG pour les maisons à louer et 10.000.000FG à 900.000.000.000FG pour les biens à vendre",
     },
   ],
 };

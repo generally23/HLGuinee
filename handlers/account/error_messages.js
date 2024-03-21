@@ -11,3 +11,5 @@ export const VERIFIED_ACCOUNT_ERROR_MESSAGE = `Votre compte est déjà verifié`
 export const VERFIFY_ACCOUNT_FAIL_ERROR_MESSAGE = `Malheureusement, nous n'avions pas pu vérifier votre compte`;
 
 export const MAIL_DELIVERY_FAIL_ERROR_MESSAGE = `Malheuresement notre service email n'a pas pu vous délivrer l'email`;
+
+export const VERIFICATION_CODE_EXPIRED__ERROR_MESSAGE = 'le code a expiré';

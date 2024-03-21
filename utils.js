@@ -28,9 +28,9 @@ export const deleteProps = (src, ...props) =>
 
 export const generateJwt = (
   id,
-  expiresIn = process.env.JWT_EXPIRATION_TIME || '30d'
+  expiresIn = process.env.JWT_EXPIRATION_TIME
 ) => {
-  return sign({ id }, process.env.JWT_SECRET || 'secret', {
+  return sign({ id }, process.env.JWT_SECRET, {
     expiresIn,
   });
 };
@@ -123,27 +123,12 @@ export const uploadAvatar = async (file, account) => {
     // convert original file to webp
     const webpAvatar = await convertToWebp(file);
 
-    // make copies of account avatar/profile in the given dimensions
-    // const copyOutput = await createFileCopies(webpAvatar, [250, 500, 800]);
-
+    // resize image to 500px with while maintaing aspect ratio
     webpAvatar.buffer = await sharp(webpAvatar.buffer).resize(500).toBuffer();
-
-    // only save the copies not the original
-    // const avatarFiles = copyOutput.copies;
-
-    // upload files to AWS S3
-    // await uploadToS3(avatarFiles);
 
     await uploadToS3([webpAvatar]);
 
-    // const firstAvatar = avatarFiles[0];
-
-    // account.avatarUrl = `${process.env.CLOUDFRONT_URL}/${firstAvatar.originalname}`;
-
     account.avatarUrl = `${process.env.CLOUDFRONT_URL}/${webpAvatar.originalname}`;
-
-    // update user with new image urls
-    // account.avatarNames = avatarFiles.map(avatar => avatar.originalname);
 
     await account.save();
   }
@@ -332,8 +317,6 @@ export const buildSearchStage = (
 
   searchStage.$search.geoWithin = geoQuery;
 
-  console.log('SearchStage', searchStage);
-
   // return built search stage based on above scenarios
   return searchStage;
 };
@@ -372,40 +355,41 @@ export const buildFilterStage = query => {
   };
 };
 
-export const buildSortStage = string => {
-  if (!string) return;
+// export const buildSortStage = string => {
+//   if (!string) return;
 
-  const sortObject = {};
+//   const sortObject = {};
 
-  // -createdAt createdAt
-  const firstLetter = string[0];
+//   // -createdAt createdAt
+//   if (string.startsWith('-')) {
+//     // copy string but exclude the -
 
-  if (firstLetter === '-') {
-    // copy string but exclude the -
-    const propertyName = string.slice(1);
-    // set sortObject to decending
-    sortObject[propertyName] = -1;
-  }
-  // set sortObject property to ascending
-  else sortObject[string] = 1;
-  // return stage
+//     const propertyName = string.slice(1);
 
-  return {
-    $sort: sortObject,
-  };
+//     // set sortObject to decending
+//     sortObject[propertyName] = -1;
+//   }
+//   // set sortObject property to ascending
+//   else sortObject[string] = 1;
+//   // return stage
+
+//   return {
+//     $sort: { ...sortObject },
+//   };
+// };
+
+export const buildSortStage = sortBy => {
+  if (!sortBy || typeof sortBy !== 'string') return;
+
+  // use _id as a separator when sort ties
+  const ascSort = { [sortBy]: 1, _id: -1 };
+
+  const descSort = { [sortBy.slice(1)]: -1, _id: -1 };
+
+  if (sortBy.startsWith('-')) return { $sort: descSort };
+
+  return { $sort: ascSort };
 };
-
-export const buildLimitStage = limit => ({ $limit: limit });
-
-export const buildCountStage = fieldName => {
-  // if user doesn't pass a field name return
-  if (!fieldName || !fieldName.length) return;
-  return { $count: fieldName };
-};
-
-export const buildSkipStage = offset => ({
-  $skip: offset,
-});
 
 export const imageLookupStage = {
   from: 'propertyImages',
@@ -430,50 +414,33 @@ export const ownerLookupStage = [
   },
 ];
 
-export const between = (num, min, max) => {
-  if (num < min) num = min;
-  if (num > max) num = max;
-  return num;
-};
+export const calculatePagination = (total, page = 1, limit = 5) => {
+  // Minimum and maximum limits permitted
+  const MIN_LIMIT = 1;
+  const MAX_LIMIT = 5;
 
-export const calculatePagination = (total, page = 1, limit) => {
-  // minimum limit permitted
-  const minLimit = 1;
-  // maximum limit permitted
-  const maxLimit = 200;
-  // parsed limit defaults to 50 if not provided
-  // const limitInt = parseInt(limit) || 100;
-  const limitInt = parseInt(limit) || 5;
+  // Parse limit to integer and ensure it's within limits
+  const parsedLimit = Math.min(Math.max(parseInt(limit), MIN_LIMIT), MAX_LIMIT);
 
-  // get limit number between min & max
-  limit = between(limitInt, minLimit, maxLimit);
+  // Parse page to integer and ensure it's within limits
+  const parsedPage = Math.max(1, parseInt(page));
 
-  const pageInt = parseInt(page) || 1;
-  // minimum page permitted
-  const firstPage = total > 0 ? 1 : 0;
-  // calculated number of pages
-  const pages = Math.ceil(total / limit);
-  // maximum page permitted
-  const lastPage = pages;
-  // get page number between min & max
-  page = between(pageInt, firstPage, lastPage);
+  // Calculate number of pages
+  const totalPages = Math.ceil(total / parsedLimit);
 
-  // calculate prev
-  const prevPage = firstPage < page ? page - 1 : null;
-  // calculate next
-  const nextPage = lastPage > page ? page + 1 : null;
+  // Calculate previous page number
+  const prevPage = parsedPage > 1 ? parsedPage - 1 : null;
 
-  // calculate skip
-  let skip = (page - 1) * limit;
+  // Calculate next page number
+  const nextPage = parsedPage < totalPages ? parsedPage + 1 : null;
 
-  // make sure skip is not negative
-  skip = skip >= 0 ? skip : 0;
+  // Calculate skip (offset)
+  const skip = Math.max(0, (parsedPage - 1) * parsedLimit);
 
-  // return pagination info
   return {
-    limit,
-    page,
-    pages,
+    limit: parsedLimit,
+    page: parsedPage,
+    pages: totalPages,
     total,
     prevPage,
     nextPage,

@@ -1,22 +1,25 @@
 import express from 'express';
-import path, { resolve } from 'path';
+import { resolve } from 'path';
 import mongoose from 'mongoose';
 import helmet from 'helmet';
 import cors from 'cors';
 import compress from 'compression';
 import cookieParser from 'cookie-parser';
-// import { default: helmet } from "helmet";
+import dotenv from 'dotenv';
+
 import mongoSanitize from 'express-mongo-sanitize';
 
 import SERVER_ROUTER from './routers/Webserver';
 import API_ROUTER from './routers/Api';
 
-import dotenv from 'dotenv';
 import { globalErrorHandler } from './handlers/errors';
 import Account from './schemas/account/index';
 import { generateDfPassword } from './utils';
 
 import { queryParser } from 'express-query-parser';
+
+// configure  environment variables
+dotenv.config();
 
 // start db connection
 export const connectToDb = async () => {
@@ -67,11 +70,14 @@ export const connectToDb = async () => {
   }
 };
 
+const cacheJsFiles = (res, path) => {
+  if (!path.endsWith('.js')) return;
+  // Enable caching for all javascript files.
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+};
+
 // setup all middleware functions
 export const setupExpressMiddleware = server => {
-  // setup environment variables
-  dotenv.config();
-
   // parse json
   server.use(express.json());
 
@@ -102,26 +108,27 @@ export const setupExpressMiddleware = server => {
   server.use(helmet());
 
   // serve static files
-  server.use(express.static(resolve(__dirname, 'public')));
+  server.use(
+    express.static(resolve(__dirname, 'public'), {
+      setHeaders: cacheJsFiles,
+    })
+  );
 
-  // sanitize every source of user input
-  // Request Body, URL Parameters, URL Query Parameters
+  // sanitize every source of user input (body, params, req params)
   server.use(mongoSanitize());
-
-  // server.get('api./subdomain', (req, res) => res.send('Test working...'));
-
-  // WEB SERVER ROUTES
-  server.use('/', SERVER_ROUTER);
 
   // API ROUTES
   server.use('/api/v1', API_ROUTER);
+
+  // WEB SERVER ROUTES
+  // server.use('*', SERVER_ROUTER);
 
   /* 
     Always serve the same html file since this is a single page app
     React will handle the routing on the client
   */
   server.all('*', (req, res) =>
-    res.sendFile(path.resolve(__dirname, 'public', 'index.html'))
+    res.sendFile(resolve(__dirname, 'public', 'index.html'))
   );
 
   // Global Error handler
@@ -135,13 +142,11 @@ export const listen = async (
 ) => {
   try {
     await server.listen(port, console.log);
-
-    console.log('listening on port 9090');
-
     console.clear();
   } catch (error) {
+    console.log('failing to listen on port 9090', error);
+
     // we must able to listen for connection on this port shutdown server
-    console.log('failing to listen on port 9090');
     process.exit();
   }
 };

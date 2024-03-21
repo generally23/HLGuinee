@@ -282,10 +282,12 @@ propertySchema.virtual('images').get(function () {
 
 // methods
 propertySchema.methods.toJSON = function () {
-  // account clone
+  // property clone
   const property = this.toObject();
+
   // remove props from user object
   deleteProps(property, 'imagesNames', '__v');
+
   // return value will be sent to client
   return property;
 };

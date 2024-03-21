@@ -280,3 +280,54 @@
 //   // return built search stage based on above scenarios
 //   return searchStage;
 // };
+
+// export const between = (num, min, max) => {
+//   if (num < min) num = min;
+//   if (num > max) num = max;
+//   return num;
+// };
+
+// export const calculatePagination = (total, page = 1, limit) => {
+//   // minimum limit permitted
+//   const MIN_LIMIT = 1;
+//   // maximum limit permitted
+//   const MAX_LIMIT = 200;
+//   // parsed limit defaults to 50 if not provided
+//   // const limitInt = parseInt(limit) || 100;
+//   const limitInt = parseInt(limit) || 5;
+
+//   // don't allow limit to go past min & max
+//   limit = between(limitInt, MIN_LIMIT, MAX_LIMIT);
+
+//   const pageInt = parseInt(page) || 1;
+//   // minimum page permitted
+//   const firstPage = total > 0 ? 1 : 0;
+//   // calculated number of pages
+//   const pages = Math.ceil(total / limit);
+//   // maximum page permitted
+//   const lastPage = pages;
+//   // get page number between min & max
+//   page = between(pageInt, firstPage, lastPage);
+
+//   // calculate prev
+//   const prevPage = firstPage < page ? page - 1 : null;
+//   // calculate next
+//   const nextPage = lastPage > page ? page + 1 : null;
+
+//   // calculate skip
+//   let skip = (page - 1) * limit;
+
+//   // make sure skip is not negative
+//   skip = skip >= 0 ? skip : 0;
+
+//   // return pagination info
+//   return {
+//     limit,
+//     page,
+//     pages,
+//     total,
+//     prevPage,
+//     nextPage,
+//     skip,
+//   };
+// };
