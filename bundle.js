@@ -228,7 +228,7 @@ const isFullHd = async file => {
   // if width & height >= FHD image passes test
   // if (width >= 1920 && height >= 1080) return true;
 
-  // if width or height does is not FHD+ test fails
+  // if width or height is not FHD+ test fails
   if (width < 1920 || height < 1080) return { passed: false };
 
   // test passes
@@ -251,6 +251,7 @@ const createFileCopies = async (source, dimensions = []) => {
     copy.buffer = await sharp(source.buffer).resize(dimension).toBuffer();
 
     copies.push(copy);
+
     all.push(copy);
   }
 
@@ -310,7 +311,10 @@ const uploadPropertyImages = async (images, property) => {
 
     // send error if images are not clear (hd)
     if (!isHighRes) {
-      throw new ServerError('Please upload high resolution images', 400);
+      throw new ServerError(
+        'Seul des images de haute qualité (hd) sont permises',
+        400
+      );
     }
 
     // convert property image to webp to optimize images for web use
@@ -507,29 +511,6 @@ const buildFilterStage = query => {
   };
 };
 
-// export const buildSortStage = string => {
-//   if (!string) return;
-
-//   const sortObject = {};
-
-//   // -createdAt createdAt
-//   if (string.startsWith('-')) {
-//     // copy string but exclude the -
-
-//     const propertyName = string.slice(1);
-
-//     // set sortObject to decending
-//     sortObject[propertyName] = -1;
-//   }
-//   // set sortObject property to ascending
-//   else sortObject[string] = 1;
-//   // return stage
-
-//   return {
-//     $sort: { ...sortObject },
-//   };
-// };
-
 const buildSortStage = sortBy => {
   if (!sortBy || typeof sortBy !== 'string') return;
 
@@ -654,27 +635,25 @@ const imageSchema = new mongoose.Schema({
 const price = {
   type: Number,
   required: [true, 'Un bien doit avoir un prix'],
-  validate: [
-    {
-      validator: function () {
-        const { purpose, price } = this;
+  validate: {
+    validator: function () {
+      const { purpose, price } = this;
 
-        const rentMin = 100_000;
-        const rentMax = 10_000_000;
+      const rentMin = 100_000;
+      const rentMax = 10_000_000;
 
-        const buyMin = 10_000_000;
-        const buyMax = 900_000_000_000;
+      const buyMin = 10_000_000;
+      const buyMax = 900_000_000_000;
 
-        if (purpose === 'rent') return price >= rentMin && price <= rentMax;
+      if (purpose === 'rent') return price >= rentMin && price <= rentMax;
 
-        if (purpose === 'sell') return price >= buyMin && price <= buyMax;
+      if (purpose === 'sell') return price >= buyMin && price <= buyMax;
 
-        return false;
-      },
-      message:
-        "Le prix d'un bien doit être entre 100.000FG et 10.000.000FG pour les maisons à louer et 10.000.000FG à 900.000.000.000FG pour les biens à vendre",
+      return false;
     },
-  ],
+    message:
+      "Le prix d'un bien doit être entre 100.000FG et 10.000.000FG pour les maisons à louer et 10.000.000FG à 900.000.000.000FG pour les biens à vendre",
+  },
 };
 
 // create ascending & desc index in a field in one go
@@ -968,7 +947,7 @@ propertySchema.methods.toJSON = function () {
 const Property = mongoose.model('Property', propertySchema);
 
 const NO_LOCATION_ERROR_MESSAGE =
-  'Vous ne pouvez pas poster un bien sans ';
+  'Vous ne pouvez pas poster un bien sans les coordonées geographiques';
 
 const LOCATION_INVALID_ERROR_MESSAGE =
   'Cannot create a property outside of Guinea';
@@ -1045,6 +1024,8 @@ const fetchProperties = catchAsyncErrors(async (req, res, next) => {
 const createProperty = catchAsyncErrors(async (req, res, next) => {
   const { location } = req.body;
 
+  const { account } = req;
+
   // send an error if no location is passed
   if (!location) return next(new ServerError(NO_LOCATION_ERROR_MESSAGE, 400));
 
@@ -1075,6 +1056,12 @@ const createProperty = catchAsyncErrors(async (req, res, next) => {
   // save property to DB
   await property.save();
 
+  // increment properties count on user's account objectxs
+  account.totalListing += 1;
+  account.listingCount += 1;
+
+  await account.save();
+
   res.status(201).json(property);
 });
 
@@ -1083,6 +1070,7 @@ const fetchProperty = catchAsyncErrors(async (req, res, next) => {
   const property = await Property.findById(req.params.propertyId).populate(
     'owner'
   );
+
   // send an error if property does not exist
   if (!property) {
     return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
@@ -1091,8 +1079,29 @@ const fetchProperty = catchAsyncErrors(async (req, res, next) => {
   res.json(property);
 });
 
-const fetchMyProperties = catchAsyncErrors(async (req, res, next) => {
-  res.json(await Property.find({ ownerId: req.account.id }));
+// gets all other properties except the one being viewed right now
+const fetchMyProperties = catchAsyncErrors(async (req, res) => {
+  // const { limit = 20, page = 1 } = req.params;
+
+  // const myPropertyCount = await Property.countDocuments({
+  //   owner: req.account._id,
+  // });
+
+  const { excludedPropertyId } = req.query;
+
+  const ownerId = req.params.accountId || req?.account?.id;
+
+  // const pagination = calculatePagination(myPropertyCount.length, page, limit);
+
+  const myProperties = await Property.find({
+    ownerId,
+    _id: { $ne: excludedPropertyId },
+  }).populate('owner');
+
+  // .skip(pagination.skip)
+  // .limit(pagination.limit);
+
+  res.json(myProperties);
 });
 
 const updateProperty = catchAsyncErrors(async (req, res, next) => {
@@ -1118,40 +1127,7 @@ const updateProperty = catchAsyncErrors(async (req, res, next) => {
 });
 
 const removeProperty = catchAsyncErrors(async (req, res, next) => {
-  // find property
-  const property = await Property.findById(req.params.propertyId);
-
-  // send error if property doesn't exist
-  if (!property) {
-    return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
-  }
-
-  // only property owner and admin allowed accounts can delete
-  const allowedAccounts = ['admin', 'sub-admin', 'agent'];
-
-  const isOwner = property.ownerId.equals(req.account.id);
-
-  const isAllowed = allowedAccounts.includes(req.account.role);
-
-  // console.log('Same account: ', property.ownerId.equals(req.account.id));
-
-  // console.log('Allowed: ', allowedAccounts.includes(req.account.role));
-
-  if (!isOwner || (!isOwner && !isAllowed)) {
-    return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
-  }
-
-  // delete all images of property from s3
-  const images = property.imagesNames;
-
-  for (let image of images) {
-    await removeFroms3(image.names);
-  }
-
-  // delete property from records
-  await Property.deleteOne({ _id: property.id });
-
-  res.status(204).json();
+  return res.json();
 });
 
 const addPropertyImages = catchAsyncErrors(async (req, res, next) => {
@@ -1292,10 +1268,13 @@ const accountSchema = new mongoose.Schema(
 
     avatarUrl: {
       type: String,
-      default: 'http://192.169.1.196:9090/assets/images/avatar.avif',
+      default: 'http://192.169.1.197/assets/images/avatar.avif',
     },
 
-    avatarNames: [String],
+    avatarNames: {
+      type: [String],
+      unique: true,
+    },
 
     dob: {
       type: Date,
@@ -1330,6 +1309,20 @@ const accountSchema = new mongoose.Schema(
     verificationCode: String,
 
     verificationCodeExpirationDate: Date,
+
+    // all time total listings
+    totalListings: {
+      type: Number,
+      default: 0,
+      required: [true],
+    },
+
+    // current total listings
+    listingCount: {
+      type: Number,
+      default: 0,
+      required: [true],
+    },
   },
   {
     timestamps: true,
@@ -1514,15 +1507,19 @@ const preventUnverifiedAccounts = catchAsyncErrors(
 
 const router$2 = express.Router();
 
-const properties = '/properties';
-const propertyRoute = `${properties}/:propertyId`;
+const propertiesRoute = '/properties';
+const propertyRoute = `${propertiesRoute}/:propertyId`;
 
 router$2
-  .route(properties)
+  .route(propertiesRoute)
   .get(fetchProperties)
   .post(authenticate(), preventUnverifiedAccounts, createProperty);
 
-router$2.get(`${properties}/my-properties`, authenticate(), fetchMyProperties);
+// could be in account's router but already went for this approach
+// ALIAS ROUTES
+// router.get(`/my-properties`, authenticate(), fetchMyProperties);
+
+// router.get(`/my-other-properties`, fetchMyOtherProperties);
 
 router$2
   .route(propertyRoute)
@@ -1740,7 +1737,7 @@ const signout = catchAsyncErrors(async (req, res, next) => {
   // remove cookie (not required)
   res.clearCookie('token');
 
-  res.status(204).json({});
+  res.json({ message: 'Votre compte à été déconnecter avec succès' });
 });
 
 const changeMyPassword = catchAsyncErrors(async (req, res, next) => {
@@ -1810,32 +1807,11 @@ const updateMyAccount = catchAsyncErrors(async (req, res, next) => {
 });
 
 const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
-  // alongside delete everything related to this account
-
-  // id of logged in account
-  const accountId = req.account.id;
-
-  // find all properties owned by this account
-  const myProperties = await Property.find({ ownerId: accountId });
-
-  // remove images of all properties made by this account from s3 bucket
-  for (let property of myProperties) {
-    const images = property.imagesNames;
-    for (let image of images) {
-      await removeFroms3(image.names);
-    }
-  }
-  // delete all properties owned by this account
-  await Property.deleteMany({ ownerId: accountId });
-
-  // finally delete account
-  await Account.deleteOne({ _id: req.account.id });
-
   // logout account . remove cookie (not required)
-  res.clearCookie('token');
+  // res.clearCookie('token');
 
   // respond to client
-  res.status(204).json();
+  return res.json({ message: 'Votre compte à été supprimer de nos serveurs' });
 });
 
 const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
@@ -2110,6 +2086,13 @@ const parentRoute = '/accounts';
 
 const systemParentRoute = `/system${parentRoute}`;
 
+router$1.get(`${parentRoute}/my-properties`, authenticate(), fetchMyProperties);
+
+// this route gets all my properties & my other properties given an id of property to exclude
+router$1.get(`${parentRoute}/:accountId/my-properties`, fetchMyProperties);
+
+// router.get(`${parentRoute}/:accountId/my-other-properties`, fetchMyOtherProperties);
+
 /** AUTHENTICATED */
 
 router$1
@@ -2282,7 +2265,7 @@ const setupExpressMiddleware = server => {
 
   server.use(
     cors({
-      origin: 'http://192.168.1.196:3000',
+      origin: 'http://192.168.1.197:3000',
       // origin: 'http://localhost:3000',
       credentials: true,
     })

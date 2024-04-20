@@ -84,6 +84,8 @@ export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
 export const createProperty = catchAsyncErrors(async (req, res, next) => {
   const { location } = req.body;
 
+  const { account } = req;
+
   // send an error if no location is passed
   if (!location) return next(new ServerError(NO_LOCATION_ERROR_MESSAGE, 400));
 
@@ -114,6 +116,12 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
   // save property to DB
   await property.save();
 
+  // increment properties count on user's account objectxs
+  account.totalListing += 1;
+  account.listingCount += 1;
+
+  await account.save();
+
   res.status(201).json(property);
 });
 
@@ -122,6 +130,7 @@ export const fetchProperty = catchAsyncErrors(async (req, res, next) => {
   const property = await Property.findById(req.params.propertyId).populate(
     'owner'
   );
+
   // send an error if property does not exist
   if (!property) {
     return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
@@ -130,8 +139,29 @@ export const fetchProperty = catchAsyncErrors(async (req, res, next) => {
   res.json(property);
 });
 
-export const fetchMyProperties = catchAsyncErrors(async (req, res, next) => {
-  res.json(await Property.find({ ownerId: req.account.id }));
+// gets all other properties except the one being viewed right now
+export const fetchMyProperties = catchAsyncErrors(async (req, res) => {
+  // const { limit = 20, page = 1 } = req.params;
+
+  // const myPropertyCount = await Property.countDocuments({
+  //   owner: req.account._id,
+  // });
+
+  const { excludedPropertyId } = req.query;
+
+  const ownerId = req.params.accountId || req?.account?.id;
+
+  // const pagination = calculatePagination(myPropertyCount.length, page, limit);
+
+  const myProperties = await Property.find({
+    ownerId,
+    _id: { $ne: excludedPropertyId },
+  }).populate('owner');
+
+  // .skip(pagination.skip)
+  // .limit(pagination.limit);
+
+  res.json(myProperties);
 });
 
 export const updateProperty = catchAsyncErrors(async (req, res, next) => {
@@ -157,6 +187,8 @@ export const updateProperty = catchAsyncErrors(async (req, res, next) => {
 });
 
 export const removeProperty = catchAsyncErrors(async (req, res, next) => {
+  return res.json();
+
   // find property
   const property = await Property.findById(req.params.propertyId);
 
@@ -165,12 +197,14 @@ export const removeProperty = catchAsyncErrors(async (req, res, next) => {
     return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
   }
 
+  const { account } = req;
+
   // only property owner and admin allowed accounts can delete
   const allowedAccounts = ['admin', 'sub-admin', 'agent'];
 
-  const isOwner = property.ownerId.equals(req.account.id);
+  const isOwner = property.ownerId.equals(account.id);
 
-  const isAllowed = allowedAccounts.includes(req.account.role);
+  const isAllowed = allowedAccounts.includes(account.role);
 
   // console.log('Same account: ', property.ownerId.equals(req.account.id));
 
@@ -189,6 +223,11 @@ export const removeProperty = catchAsyncErrors(async (req, res, next) => {
 
   // delete property from records
   await Property.deleteOne({ _id: property.id });
+
+  // decrement the number of properties in account document
+  account.listingCount -= 1;
+
+  await account.save();
 
   res.status(204).json();
 });

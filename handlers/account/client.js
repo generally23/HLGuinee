@@ -122,7 +122,7 @@ export const signout = catchAsyncErrors(async (req, res, next) => {
   // remove cookie (not required)
   res.clearCookie('token');
 
-  res.status(204).json({});
+  res.json({ message: 'Votre compte à été déconnecter avec succès' });
 });
 
 export const changeMyPassword = catchAsyncErrors(async (req, res, next) => {
@@ -192,6 +192,11 @@ export const updateMyAccount = catchAsyncErrors(async (req, res, next) => {
 });
 
 export const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
+  // logout account . remove cookie (not required)
+  // res.clearCookie('token');
+
+  // respond to client
+  return res.json({ message: 'Votre compte à été supprimer de nos serveurs' });
   // alongside delete everything related to this account
 
   // id of logged in account
@@ -217,7 +222,7 @@ export const deleteMyAccount = catchAsyncErrors(async (req, res, next) => {
   res.clearCookie('token');
 
   // respond to client
-  res.status(204).json();
+  res.json({ message: 'Votre compte à été supprimer de nos serveurs' });
 });
 
 export const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {

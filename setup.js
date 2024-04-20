@@ -92,7 +92,7 @@ export const setupExpressMiddleware = server => {
 
   server.use(
     cors({
-      origin: 'http://192.168.1.196:3000',
+      origin: 'http://192.168.1.197:3000',
       // origin: 'http://localhost:3000',
       credentials: true,
     })

@@ -56,10 +56,13 @@ const accountSchema = new mongoose.Schema(
 
     avatarUrl: {
       type: String,
-      default: 'http://192.169.1.196:9090/assets/images/avatar.avif',
+      default: 'http://192.169.1.197/assets/images/avatar.avif',
     },
 
-    avatarNames: [String],
+    avatarNames: {
+      type: [String],
+      unique: true,
+    },
 
     dob: {
       type: Date,
@@ -94,6 +97,20 @@ const accountSchema = new mongoose.Schema(
     verificationCode: String,
 
     verificationCodeExpirationDate: Date,
+
+    // all time total listings
+    totalListings: {
+      type: Number,
+      default: 0,
+      required: [true],
+    },
+
+    // current total listings
+    listingCount: {
+      type: Number,
+      default: 0,
+      required: [true],
+    },
   },
   {
     timestamps: true,

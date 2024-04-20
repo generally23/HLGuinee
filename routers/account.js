@@ -13,6 +13,7 @@ import {
   verifyAccount,
   sendVerificationCode,
 } from '../handlers/account/client';
+
 import {
   systemAdminCreateAccount,
   systemAdminPasswordChange,
@@ -22,12 +23,20 @@ import {
 } from '../handlers/account/system';
 
 import { uploader } from '../utils';
+import { fetchMyProperties } from '../handlers/property/index';
 
 const router = express.Router();
 
 const parentRoute = '/accounts';
 
 const systemParentRoute = `/system${parentRoute}`;
+
+router.get(`${parentRoute}/my-properties`, authenticate(), fetchMyProperties);
+
+// this route gets all my properties & my other properties given an id of property to exclude
+router.get(`${parentRoute}/:accountId/my-properties`, fetchMyProperties);
+
+// router.get(`${parentRoute}/:accountId/my-other-properties`, fetchMyOtherProperties);
 
 /** AUTHENTICATED */
 

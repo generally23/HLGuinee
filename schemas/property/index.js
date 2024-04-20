@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { Schema } from 'mongoose';
 import { deleteProps, preProcessImage } from '../../utils';
 import { locationSchema } from './location';
 import { imageSchema } from './image';

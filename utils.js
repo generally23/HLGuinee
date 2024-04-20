@@ -66,7 +66,7 @@ export const isFullHd = async file => {
   // if width & height >= FHD image passes test
   // if (width >= 1920 && height >= 1080) return true;
 
-  // if width or height does is not FHD+ test fails
+  // if width or height is not FHD+ test fails
   if (width < 1920 || height < 1080) return { passed: false };
 
   // test passes
@@ -89,6 +89,7 @@ export const createFileCopies = async (source, dimensions = []) => {
     copy.buffer = await sharp(source.buffer).resize(dimension).toBuffer();
 
     copies.push(copy);
+
     all.push(copy);
   }
 
@@ -148,7 +149,10 @@ export const uploadPropertyImages = async (images, property) => {
 
     // send error if images are not clear (hd)
     if (!isHighRes) {
-      throw new ServerError('Please upload high resolution images', 400);
+      throw new ServerError(
+        'Seul des images de haute qualité (hd) sont permises',
+        400
+      );
     }
 
     // convert property image to webp to optimize images for web use
@@ -354,29 +358,6 @@ export const buildFilterStage = query => {
     $match: JSON.parse(filterObjectString),
   };
 };
-
-// export const buildSortStage = string => {
-//   if (!string) return;
-
-//   const sortObject = {};
-
-//   // -createdAt createdAt
-//   if (string.startsWith('-')) {
-//     // copy string but exclude the -
-
-//     const propertyName = string.slice(1);
-
-//     // set sortObject to decending
-//     sortObject[propertyName] = -1;
-//   }
-//   // set sortObject property to ascending
-//   else sortObject[string] = 1;
-//   // return stage
-
-//   return {
-//     $sort: { ...sortObject },
-//   };
-// };
 
 export const buildSortStage = sortBy => {
   if (!sortBy || typeof sortBy !== 'string') return;

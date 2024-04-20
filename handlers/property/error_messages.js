@@ -1,5 +1,5 @@
 export const NO_LOCATION_ERROR_MESSAGE =
-  'Vous ne pouvez pas poster un bien sans ';
+  'Vous ne pouvez pas poster un bien sans les coordonées geographiques';
 
 export const LOCATION_INVALID_ERROR_MESSAGE =
   'Cannot create a property outside of Guinea';

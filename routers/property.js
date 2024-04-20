@@ -8,21 +8,26 @@ import {
   removeProperty,
   addPropertyImages,
   removePropertyImages,
-  fetchMyProperties,
+  // fetchMyProperties,
+  // fetchMyOtherProperties,
 } from '../handlers/property/index';
 import { authenticate, preventUnverifiedAccounts } from '../handlers/auth';
 
 const router = express.Router();
 
-const properties = '/properties';
-const propertyRoute = `${properties}/:propertyId`;
+const propertiesRoute = '/properties';
+const propertyRoute = `${propertiesRoute}/:propertyId`;
 
 router
-  .route(properties)
+  .route(propertiesRoute)
   .get(fetchProperties)
   .post(authenticate(), preventUnverifiedAccounts, createProperty);
 
-router.get(`${properties}/my-properties`, authenticate(), fetchMyProperties);
+// could be in account's router but already went for this approach
+// ALIAS ROUTES
+// router.get(`/my-properties`, authenticate(), fetchMyProperties);
+
+// router.get(`/my-other-properties`, fetchMyOtherProperties);
 
 router
   .route(propertyRoute)
