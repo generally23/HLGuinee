@@ -1,5 +1,9 @@
-import mongoose, { Schema } from 'mongoose';
-import { deleteProps, preProcessImage } from '../../utils';
+import mongoose from 'mongoose';
+import {
+  deleteProps,
+  getPropertyThumbnail,
+  preProcessImage,
+} from '../../utils';
 import { locationSchema } from './location';
 import { imageSchema } from './image';
 import { price } from './price';
@@ -11,7 +15,7 @@ const createAscDescIndex = (schema, field) => {
 };
 
 // house validator
-const validator = value => value !== 'house';
+// const validator = value => value !== 'house';
 
 // SCHEMA
 const propertySchema = new mongoose.Schema(
@@ -30,7 +34,7 @@ const propertySchema = new mongoose.Schema(
       validate: {
         validator(value) {
           // property can't be land and be rented for now
-          if (this.type === 'land' && value === 'rent') return false;
+          if (this.type === 'land' && value !== 'sell') return false;
           return true;
         },
       },
@@ -39,13 +43,13 @@ const propertySchema = new mongoose.Schema(
     price,
 
     // only allowed for houses
-    rentPeriod: {
-      type: String,
-      default: function () {
-        return this.type === 'house' ? 'monthly' : undefined;
-      },
-      enum: ['monthly'],
-    },
+    // rentPeriod: {
+    //   type: String,
+    //   default: function () {
+    //     return this.type === 'house' ? 'monthly' : undefined;
+    //   },
+    //   enum: ['monthly'],
+    // },
 
     ownerId: {
       required: [true, 'Un bien doit avoir un propriétaire'],
@@ -82,14 +86,6 @@ const propertySchema = new mongoose.Schema(
         },
         'Surface Batie est réquise',
       ],
-      default: function () {
-        // if property is a house and user did not set this property set to area
-        return this.type === 'house' ? this.area : undefined;
-      },
-      validate: {
-        validator,
-        message: 'Surface Batie est permis que pour les maisons',
-      },
     },
 
     areaUnit: {
@@ -113,7 +109,7 @@ const propertySchema = new mongoose.Schema(
     status: {
       type: String,
       required: [true, 'Status est réquis'],
-      enum: ['unlisted', 'listed', 'pending', 'sold', 'rented'],
+      enum: ['reviewing', 'unlisted', 'listed', 'pending', 'sold', 'rented'],
       default: 'unlisted',
     },
 
@@ -125,10 +121,6 @@ const propertySchema = new mongoose.Schema(
         },
         'Chambres est réquise',
       ],
-      validate: {
-        validator,
-        message: 'Chambres est permis que pour les maisons',
-      },
     },
 
     bathrooms: {
@@ -139,10 +131,6 @@ const propertySchema = new mongoose.Schema(
         },
         'Douches est réquis is required',
       ],
-      validate: {
-        validator,
-        message: 'Douches est permis que pour les maisons',
-      },
     },
 
     kitchens: {
@@ -156,10 +144,6 @@ const propertySchema = new mongoose.Schema(
         },
         'Cuisine est réquise',
       ],
-      validate: {
-        validator,
-        message: 'Cuisine est permis que pour les maisons',
-      },
     },
 
     garages: {
@@ -173,10 +157,6 @@ const propertySchema = new mongoose.Schema(
         },
         'Garages est réquis',
       ],
-      validate: {
-        validator,
-        message: 'Les garages sont permis que pour les maisons',
-      },
     },
 
     diningRooms: {
@@ -190,10 +170,6 @@ const propertySchema = new mongoose.Schema(
         },
         'diningRooms is required',
       ],
-      validate: {
-        validator,
-        message: 'Les sale à manger sont permis que pour les maisons',
-      },
     },
 
     livingRooms: {
@@ -207,16 +183,12 @@ const propertySchema = new mongoose.Schema(
         },
         'livingRooms is required',
       ],
-      validate: {
-        validator,
-        message: 'Les salons sont permis que pour les maisons',
-      },
     },
 
     yearBuilt: {
       type: Number,
       // minium property built year
-      min: [1800, 'Un bien built year must be from year 1800'],
+      min: [1800, 'Un bien ne peut pas etre construit avant 1800'],
       // don't allow property buil year to be in the future
       max: [
         new Date().getFullYear(),
@@ -249,12 +221,21 @@ const propertySchema = new mongoose.Schema(
           return this.type === 'house';
         },
       ],
-      validate: {
-        validator,
-        message: 'Seul une maison possède de piscine',
-      },
     },
+
     tags: [String],
+
+    // platform related properties
+    publishDate: Date,
+    unPublishDate: Date,
+
+    statusChangeDate: Date,
+
+    paymentStatus: {
+      type: String,
+      enum: ['paid', 'unpaid'],
+      default: 'unpaid',
+    },
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
@@ -285,11 +266,75 @@ propertySchema.methods.toJSON = function () {
   // property clone
   const property = this.toObject();
 
+  property.images = preProcessImage(property);
+
+  // append it a thumbnail image as the 1st image
+  property.thumbnail = getPropertyThumbnail(property.images);
+
   // remove props from user object
   deleteProps(property, 'imagesNames', '__v');
 
   // return value will be sent to client
   return property;
+};
+
+propertySchema.methods.changeStatus = async function (newStatus, errorMessage) {
+  const allStates = ['unlisted', 'listed', 'pending', 'sold', 'rented'];
+
+  const transitions = {
+    listed: allStates,
+    unlisted: ['unlisted', 'listed'],
+    sold: ['sold', 'listed'],
+    rented: ['rented', 'listed'],
+    pending: allStates,
+  };
+  // get status from property
+  const property = this;
+
+  const isAllowed = transitions[property.status].includes(newStatus);
+
+  if (!isAllowed) throw Error(errorMessage);
+
+  property.status = newStatus;
+  property.statusChangeDate = Date.now();
+
+  return property.save();
+};
+
+propertySchema.methods.list = async function () {
+  // make sure user has payed
+
+  await this.changeStatus('listed', 'This property already listed!');
+};
+
+propertySchema.methods.unlist = async function () {
+  await this.changeStatus('unlisted', "You can't unlist this property now");
+};
+
+propertySchema.methods.markPending = async function () {
+  await this.changeStatus('pending', 'There are some errors in your data');
+};
+
+propertySchema.methods.isBuyout = function () {
+  return this.purpose === 'sell';
+};
+
+propertySchema.methods.isRental = function () {
+  return this.purpose === 'rent';
+};
+
+propertySchema.methods.markSold = async function () {
+  // make sure this is a buyout
+  if (!this.isBuyout()) throw Error("Can't mark as sold a renting property!");
+
+  await this.changeStatus('sold', 'This property is not available for sale');
+};
+
+propertySchema.methods.markRented = async function () {
+  // make sure this is a rental
+  if (!this.isRental()) throw Error("Can't mark as rent a selling property!");
+
+  await this.changeStatus('rented', 'This property is not available for rent');
 };
 
 const Property = mongoose.model('Property', propertySchema);

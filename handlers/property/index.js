@@ -7,6 +7,8 @@ import {
   buildSearchStage,
   buildSortStage,
   calculatePagination,
+  deleteProps,
+  getPropertyThumbnail,
   insideGuinea,
   objectAssign,
   ownerLookupStage,
@@ -20,6 +22,28 @@ import {
   PROPERTY_NOTFOUND_ERROR_MESSAGE,
 } from './error_messages';
 import { NOT_PERMITTED_ERROR_MESSAGE } from '../error_messages';
+
+// don't allow anyone to update these properties
+const immutableProps = [
+  'ownerId',
+  'status',
+  'publishDate',
+  'unPublishDate',
+  'statusChangeDate',
+];
+
+// this is used as a patch for now but is to be redesigned later
+const houseOnlyProps = [
+  'areaBuilt',
+  'rooms',
+  'bathrooms',
+  'kitchens',
+  'garages',
+  'diningRooms',
+  'livingRooms',
+  'yearBuilt',
+  'pools',
+];
 
 export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
   const { north_east_bounds, south_west_bounds } = req.headers;
@@ -70,18 +94,25 @@ export const fetchProperties = catchAsyncErrors(async (req, res, next) => {
   // preprocess images for this property to serve client the right content
   properties.forEach(property => {
     property.images = preProcessImage(property);
+
+    // append it a thumbnail image as the 1st image
+    property.thumbnail = getPropertyThumbnail(property.images);
+
     // remove property names from the property object
     delete property.imagesNames;
   });
 
-  // console.log('Filters: ', filterStage);
+  console.log('Filters: ', filterStage);
 
   // console.log('Sort Object: ', sortStage);
 
-  res.json({ ...pagination, properties });
+  res.json({ ...pagination, properties, filterStage });
 });
 
 export const createProperty = catchAsyncErrors(async (req, res, next) => {
+  // don't allow anyone to preset these properties at creation time
+  deleteProps(req.body, ...immutableProps);
+
   const { location } = req.body;
 
   const { account } = req;
@@ -96,6 +127,9 @@ export const createProperty = catchAsyncErrors(async (req, res, next) => {
 
   if (!fullyInGuinea)
     return next(new ServerError(LOCATION_INVALID_ERROR_MESSAGE, 400));
+
+  // patch delete house props when land type is being created
+  if (req.body.type === 'land') deleteProps(req.body, ...houseOnlyProps);
 
   // create new property
   const property = new Property(req.body);
@@ -147,16 +181,22 @@ export const fetchMyProperties = catchAsyncErrors(async (req, res) => {
   //   owner: req.account._id,
   // });
 
-  const { excludedPropertyId } = req.query;
+  const { excludedPropertyId, status } = req.query;
+
+  const filterObject = {};
 
   const ownerId = req.params.accountId || req?.account?.id;
 
+  objectAssign(
+    { _id: { $ne: excludedPropertyId }, status, ownerId },
+    filterObject
+  );
+
   // const pagination = calculatePagination(myPropertyCount.length, page, limit);
 
-  const myProperties = await Property.find({
-    ownerId,
-    _id: { $ne: excludedPropertyId },
-  }).populate('owner');
+  const myProperties = await Property.find(filterObject)
+    .populate('owner')
+    .sort('-createdAt');
 
   // .skip(pagination.skip)
   // .limit(pagination.limit);
@@ -165,25 +205,50 @@ export const fetchMyProperties = catchAsyncErrors(async (req, res) => {
 });
 
 export const updateProperty = catchAsyncErrors(async (req, res, next) => {
-  // don't allow anyone to update property owner
-  delete req.body.ownerId;
+  deleteProps(req.body, ...immutableProps);
 
   const property = await Property.findById(req.params.propertyId);
 
-  if (!property) {
-    // error
+  // error
+  if (!property)
     return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
-  }
 
-  if (!property.ownerId.equals(req.account.id)) {
+  // make sure only owner is allowed to update
+  if (!property.ownerId.equals(req.account.id))
     return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
-  }
+
+  // patch delete house props when updating a land type property
+  if (property.type === 'land') deleteProps(req.body, ...houseOnlyProps);
+
+  console.log(req.body);
 
   objectAssign(req.body, property, { mode: 'nostrict' });
 
   await property.save();
 
   res.json(property);
+});
+
+export const changePropertyStatus = catchAsyncErrors(async (req, res, next) => {
+  const property = await Property.findById(req.params.propertyId);
+
+  const { newStatus } = req.query;
+
+  if (!property) return next(new ServerError('Property not found'));
+
+  const actions = {
+    listed: 'list',
+    unlisted: 'unlist',
+    pending: 'markPending',
+    sold: 'markSold',
+    rented: 'markRented',
+  };
+
+  const currentAction = actions[newStatus];
+
+  if (currentAction) await property[currentAction]();
+
+  res.status(201).json(property);
 });
 
 export const removeProperty = catchAsyncErrors(async (req, res, next) => {
@@ -277,8 +342,6 @@ export const removePropertyImages = catchAsyncErrors(async (req, res, next) => {
 
   const { names } = req.body;
 
-  console.log(names);
-
   // find property
   const property = await Property.findById(propertyId);
 
@@ -302,16 +365,15 @@ export const removePropertyImages = catchAsyncErrors(async (req, res, next) => {
       imageObject => imageObject.sourceName === imageName
     );
 
-    if (image) {
-      // remove image info from db
-      property.imagesNames = property.imagesNames.filter(
-        imageObject => imageObject.sourceName !== imageName
-      );
+    if (!image) return;
 
-      // remove image and all it's duplicates from s3
-      // run this in the background to save time of response
-      removeFroms3(image.names);
-    }
+    // remove image and all it's duplicates from s3
+    await removeFroms3(image.names);
+
+    // remove image info from db
+    property.imagesNames = property.imagesNames.filter(
+      imageObject => imageObject.sourceName !== imageName
+    );
   }
 
   await property.save();

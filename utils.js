@@ -7,7 +7,7 @@ import { sign } from 'jsonwebtoken';
 import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
-import { booleanPointInPolygon, point, polygon } from '@turf/turf';
+import { booleanPointInPolygon, multiPolygon, point } from '@turf/turf';
 
 export const objectAssign = (source, target, options = { mode: '' }) => {
   if (!source || !target) return;
@@ -263,7 +263,7 @@ export const insideGuinea = async coordinates => {
 
     const place = point(coordinates);
 
-    const area = polygon(guineaCoordinates);
+    const area = multiPolygon(guineaCoordinates);
 
     return booleanPointInPolygon(place, area);
   } catch (e) {
@@ -326,6 +326,12 @@ export const buildSearchStage = (
 };
 
 export const buildFilterStage = query => {
+  const today = new Date();
+
+  const weekAgo = new Date();
+
+  weekAgo.setDate(weekAgo.getDate() - 7);
+
   const filterObject = {};
 
   const filters = [
@@ -355,7 +361,17 @@ export const buildFilterStage = query => {
   );
 
   return {
-    $match: JSON.parse(filterObjectString),
+    $match: {
+      // these are default filters
+      $or: [
+        { status: { $in: ['listed', 'pending'] } },
+        {
+          status: { $in: ['sold', 'rented'] },
+          statusChangeDate: { $lte: today, $gte: weekAgo },
+        },
+      ],
+      ...JSON.parse(filterObjectString),
+    },
   };
 };
 
@@ -395,10 +411,10 @@ export const ownerLookupStage = [
   },
 ];
 
-export const calculatePagination = (total, page = 1, limit = 5) => {
+export const calculatePagination = (total, page = 1, limit = 50) => {
   // Minimum and maximum limits permitted
   const MIN_LIMIT = 1;
-  const MAX_LIMIT = 5;
+  const MAX_LIMIT = 200;
 
   // Parse limit to integer and ensure it's within limits
   const parsedLimit = Math.min(Math.max(parseInt(limit), MIN_LIMIT), MAX_LIMIT);
@@ -446,4 +462,14 @@ export const preProcessImage = property => {
       srcset: formatSrset(names.map(name => `${CLOUDFRONT_URL}/${name}`)),
     };
   });
+};
+
+export const getPropertyThumbnail = images => {
+  const { CLOUDFRONT_URL } = process.env;
+  const placeholderImage = {
+    src: `${CLOUDFRONT_URL}/default-property-thumbnail.png`,
+    srcset: '',
+  };
+
+  return images[0] || placeholderImage;
 };

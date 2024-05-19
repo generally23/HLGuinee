@@ -415,7 +415,7 @@ const insideGuinea = async coordinates => {
 
     const place = turf.point(coordinates);
 
-    const area = turf.polygon(guineaCoordinates);
+    const area = turf.multiPolygon(guineaCoordinates);
 
     return turf.booleanPointInPolygon(place, area);
   } catch (e) {
@@ -478,6 +478,12 @@ const buildSearchStage = (
 };
 
 const buildFilterStage = query => {
+  const today = new Date();
+
+  const weekAgo = new Date();
+
+  weekAgo.setDate(weekAgo.getDate() - 7);
+
   const filterObject = {};
 
   const filters = [
@@ -507,7 +513,17 @@ const buildFilterStage = query => {
   );
 
   return {
-    $match: JSON.parse(filterObjectString),
+    $match: {
+      // these are default filters
+      $or: [
+        { status: { $in: ['listed', 'pending'] } },
+        {
+          status: { $in: ['sold', 'rented'] },
+          statusChangeDate: { $lte: today, $gte: weekAgo },
+        },
+      ],
+      ...JSON.parse(filterObjectString),
+    },
   };
 };
 
@@ -540,10 +556,10 @@ const ownerLookupStage = [
   },
 ];
 
-const calculatePagination = (total, page = 1, limit = 5) => {
+const calculatePagination = (total, page = 1, limit = 50) => {
   // Minimum and maximum limits permitted
   const MIN_LIMIT = 1;
-  const MAX_LIMIT = 5;
+  const MAX_LIMIT = 200;
 
   // Parse limit to integer and ensure it's within limits
   const parsedLimit = Math.min(Math.max(parseInt(limit), MIN_LIMIT), MAX_LIMIT);
@@ -591,6 +607,16 @@ const preProcessImage = property => {
       srcset: formatSrset(names.map(name => `${CLOUDFRONT_URL}/${name}`)),
     };
   });
+};
+
+const getPropertyThumbnail = images => {
+  const { CLOUDFRONT_URL } = process.env;
+  const placeholderImage = {
+    src: `${CLOUDFRONT_URL}/default-property-thumbnail.png`,
+    srcset: '',
+  };
+
+  return images[0] || placeholderImage;
 };
 
 const locationSchema = new mongoose.Schema({
@@ -663,7 +689,7 @@ const createAscDescIndex = (schema, field) => {
 };
 
 // house validator
-const validator = value => value !== 'house';
+// const validator = value => value !== 'house';
 
 // SCHEMA
 const propertySchema = new mongoose.Schema(
@@ -682,7 +708,7 @@ const propertySchema = new mongoose.Schema(
       validate: {
         validator(value) {
           // property can't be land and be rented for now
-          if (this.type === 'land' && value === 'rent') return false;
+          if (this.type === 'land' && value !== 'sell') return false;
           return true;
         },
       },
@@ -691,13 +717,13 @@ const propertySchema = new mongoose.Schema(
     price,
 
     // only allowed for houses
-    rentPeriod: {
-      type: String,
-      default: function () {
-        return this.type === 'house' ? 'monthly' : undefined;
-      },
-      enum: ['monthly'],
-    },
+    // rentPeriod: {
+    //   type: String,
+    //   default: function () {
+    //     return this.type === 'house' ? 'monthly' : undefined;
+    //   },
+    //   enum: ['monthly'],
+    // },
 
     ownerId: {
       required: [true, 'Un bien doit avoir un propriétaire'],
@@ -734,14 +760,6 @@ const propertySchema = new mongoose.Schema(
         },
         'Surface Batie est réquise',
       ],
-      default: function () {
-        // if property is a house and user did not set this property set to area
-        return this.type === 'house' ? this.area : undefined;
-      },
-      validate: {
-        validator,
-        message: 'Surface Batie est permis que pour les maisons',
-      },
     },
 
     areaUnit: {
@@ -765,7 +783,7 @@ const propertySchema = new mongoose.Schema(
     status: {
       type: String,
       required: [true, 'Status est réquis'],
-      enum: ['unlisted', 'listed', 'pending', 'sold', 'rented'],
+      enum: ['reviewing', 'unlisted', 'listed', 'pending', 'sold', 'rented'],
       default: 'unlisted',
     },
 
@@ -777,10 +795,6 @@ const propertySchema = new mongoose.Schema(
         },
         'Chambres est réquise',
       ],
-      validate: {
-        validator,
-        message: 'Chambres est permis que pour les maisons',
-      },
     },
 
     bathrooms: {
@@ -791,10 +805,6 @@ const propertySchema = new mongoose.Schema(
         },
         'Douches est réquis is required',
       ],
-      validate: {
-        validator,
-        message: 'Douches est permis que pour les maisons',
-      },
     },
 
     kitchens: {
@@ -808,10 +818,6 @@ const propertySchema = new mongoose.Schema(
         },
         'Cuisine est réquise',
       ],
-      validate: {
-        validator,
-        message: 'Cuisine est permis que pour les maisons',
-      },
     },
 
     garages: {
@@ -825,10 +831,6 @@ const propertySchema = new mongoose.Schema(
         },
         'Garages est réquis',
       ],
-      validate: {
-        validator,
-        message: 'Les garages sont permis que pour les maisons',
-      },
     },
 
     diningRooms: {
@@ -842,10 +844,6 @@ const propertySchema = new mongoose.Schema(
         },
         'diningRooms is required',
       ],
-      validate: {
-        validator,
-        message: 'Les sale à manger sont permis que pour les maisons',
-      },
     },
 
     livingRooms: {
@@ -859,16 +857,12 @@ const propertySchema = new mongoose.Schema(
         },
         'livingRooms is required',
       ],
-      validate: {
-        validator,
-        message: 'Les salons sont permis que pour les maisons',
-      },
     },
 
     yearBuilt: {
       type: Number,
       // minium property built year
-      min: [1800, 'Un bien built year must be from year 1800'],
+      min: [1800, 'Un bien ne peut pas etre construit avant 1800'],
       // don't allow property buil year to be in the future
       max: [
         new Date().getFullYear(),
@@ -901,12 +895,21 @@ const propertySchema = new mongoose.Schema(
           return this.type === 'house';
         },
       ],
-      validate: {
-        validator,
-        message: 'Seul une maison possède de piscine',
-      },
     },
+
     tags: [String],
+
+    // platform related properties
+    publishDate: Date,
+    unPublishDate: Date,
+
+    statusChangeDate: Date,
+
+    paymentStatus: {
+      type: String,
+      enum: ['paid', 'unpaid'],
+      default: 'unpaid',
+    },
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
@@ -937,11 +940,75 @@ propertySchema.methods.toJSON = function () {
   // property clone
   const property = this.toObject();
 
+  property.images = preProcessImage(property);
+
+  // append it a thumbnail image as the 1st image
+  property.thumbnail = getPropertyThumbnail(property.images);
+
   // remove props from user object
   deleteProps(property, 'imagesNames', '__v');
 
   // return value will be sent to client
   return property;
+};
+
+propertySchema.methods.changeStatus = async function (newStatus, errorMessage) {
+  const allStates = ['unlisted', 'listed', 'pending', 'sold', 'rented'];
+
+  const transitions = {
+    listed: allStates,
+    unlisted: ['unlisted', 'listed'],
+    sold: ['sold', 'listed'],
+    rented: ['rented', 'listed'],
+    pending: allStates,
+  };
+  // get status from property
+  const property = this;
+
+  const isAllowed = transitions[property.status].includes(newStatus);
+
+  if (!isAllowed) throw Error(errorMessage);
+
+  property.status = newStatus;
+  property.statusChangeDate = Date.now();
+
+  return property.save();
+};
+
+propertySchema.methods.list = async function () {
+  // make sure user has payed
+
+  await this.changeStatus('listed', 'This property already listed!');
+};
+
+propertySchema.methods.unlist = async function () {
+  await this.changeStatus('unlisted', "You can't unlist this property now");
+};
+
+propertySchema.methods.markPending = async function () {
+  await this.changeStatus('pending', 'There are some errors in your data');
+};
+
+propertySchema.methods.isBuyout = function () {
+  return this.purpose === 'sell';
+};
+
+propertySchema.methods.isRental = function () {
+  return this.purpose === 'rent';
+};
+
+propertySchema.methods.markSold = async function () {
+  // make sure this is a buyout
+  if (!this.isBuyout()) throw Error("Can't mark as sold a renting property!");
+
+  await this.changeStatus('sold', 'This property is not available for sale');
+};
+
+propertySchema.methods.markRented = async function () {
+  // make sure this is a rental
+  if (!this.isRental()) throw Error("Can't mark as rent a selling property!");
+
+  await this.changeStatus('rented', 'This property is not available for rent');
 };
 
 const Property = mongoose.model('Property', propertySchema);
@@ -960,6 +1027,28 @@ const maxImagesLength = parseInt(process.env.MAX_PROPERTY_IMAGES) || 40;
 const MAX_IMAGE_ALLOWED_ERROR_MESSAGE = `Un bien ne peut pas avoir plus de ${maxImagesLength} photos`;
 
 const NOT_PERMITTED_ERROR_MESSAGE = `Vous n'êtes pas permis de performer ces actions`;
+
+// don't allow anyone to update these properties
+const immutableProps = [
+  'ownerId',
+  'status',
+  'publishDate',
+  'unPublishDate',
+  'statusChangeDate',
+];
+
+// this is used as a patch for now but is to be redesigned later
+const houseOnlyProps = [
+  'areaBuilt',
+  'rooms',
+  'bathrooms',
+  'kitchens',
+  'garages',
+  'diningRooms',
+  'livingRooms',
+  'yearBuilt',
+  'pools',
+];
 
 const fetchProperties = catchAsyncErrors(async (req, res, next) => {
   const { north_east_bounds, south_west_bounds } = req.headers;
@@ -1010,18 +1099,25 @@ const fetchProperties = catchAsyncErrors(async (req, res, next) => {
   // preprocess images for this property to serve client the right content
   properties.forEach(property => {
     property.images = preProcessImage(property);
+
+    // append it a thumbnail image as the 1st image
+    property.thumbnail = getPropertyThumbnail(property.images);
+
     // remove property names from the property object
     delete property.imagesNames;
   });
 
-  // console.log('Filters: ', filterStage);
+  console.log('Filters: ', filterStage);
 
   // console.log('Sort Object: ', sortStage);
 
-  res.json({ ...pagination, properties });
+  res.json({ ...pagination, properties, filterStage });
 });
 
 const createProperty = catchAsyncErrors(async (req, res, next) => {
+  // don't allow anyone to preset these properties at creation time
+  deleteProps(req.body, ...immutableProps);
+
   const { location } = req.body;
 
   const { account } = req;
@@ -1036,6 +1132,9 @@ const createProperty = catchAsyncErrors(async (req, res, next) => {
 
   if (!fullyInGuinea)
     return next(new ServerError(LOCATION_INVALID_ERROR_MESSAGE, 400));
+
+  // patch delete house props when land type is being created
+  if (req.body.type === 'land') deleteProps(req.body, ...houseOnlyProps);
 
   // create new property
   const property = new Property(req.body);
@@ -1087,16 +1186,22 @@ const fetchMyProperties = catchAsyncErrors(async (req, res) => {
   //   owner: req.account._id,
   // });
 
-  const { excludedPropertyId } = req.query;
+  const { excludedPropertyId, status } = req.query;
+
+  const filterObject = {};
 
   const ownerId = req.params.accountId || req?.account?.id;
 
+  objectAssign(
+    { _id: { $ne: excludedPropertyId }, status, ownerId },
+    filterObject
+  );
+
   // const pagination = calculatePagination(myPropertyCount.length, page, limit);
 
-  const myProperties = await Property.find({
-    ownerId,
-    _id: { $ne: excludedPropertyId },
-  }).populate('owner');
+  const myProperties = await Property.find(filterObject)
+    .populate('owner')
+    .sort('-createdAt');
 
   // .skip(pagination.skip)
   // .limit(pagination.limit);
@@ -1105,25 +1210,50 @@ const fetchMyProperties = catchAsyncErrors(async (req, res) => {
 });
 
 const updateProperty = catchAsyncErrors(async (req, res, next) => {
-  // don't allow anyone to update property owner
-  delete req.body.ownerId;
+  deleteProps(req.body, ...immutableProps);
 
   const property = await Property.findById(req.params.propertyId);
 
-  if (!property) {
-    // error
+  // error
+  if (!property)
     return next(new ServerError(PROPERTY_NOTFOUND_ERROR_MESSAGE, 404));
-  }
 
-  if (!property.ownerId.equals(req.account.id)) {
+  // make sure only owner is allowed to update
+  if (!property.ownerId.equals(req.account.id))
     return next(new ServerError(NOT_PERMITTED_ERROR_MESSAGE, 403));
-  }
+
+  // patch delete house props when updating a land type property
+  if (property.type === 'land') deleteProps(req.body, ...houseOnlyProps);
+
+  console.log(req.body);
 
   objectAssign(req.body, property, { mode: 'nostrict' });
 
   await property.save();
 
   res.json(property);
+});
+
+const changePropertyStatus = catchAsyncErrors(async (req, res, next) => {
+  const property = await Property.findById(req.params.propertyId);
+
+  const { newStatus } = req.query;
+
+  if (!property) return next(new ServerError('Property not found'));
+
+  const actions = {
+    listed: 'list',
+    unlisted: 'unlist',
+    pending: 'markPending',
+    sold: 'markSold',
+    rented: 'markRented',
+  };
+
+  const currentAction = actions[newStatus];
+
+  if (currentAction) await property[currentAction]();
+
+  res.status(201).json(property);
 });
 
 const removeProperty = catchAsyncErrors(async (req, res, next) => {
@@ -1175,8 +1305,6 @@ const removePropertyImages = catchAsyncErrors(async (req, res, next) => {
 
   const { names } = req.body;
 
-  console.log(names);
-
   // find property
   const property = await Property.findById(propertyId);
 
@@ -1200,16 +1328,15 @@ const removePropertyImages = catchAsyncErrors(async (req, res, next) => {
       imageObject => imageObject.sourceName === imageName
     );
 
-    if (image) {
-      // remove image info from db
-      property.imagesNames = property.imagesNames.filter(
-        imageObject => imageObject.sourceName !== imageName
-      );
+    if (!image) return;
 
-      // remove image and all it's duplicates from s3
-      // run this in the background to save time of response
-      removeFroms3(image.names);
-    }
+    // remove image and all it's duplicates from s3
+    await removeFroms3(image.names);
+
+    // remove image info from db
+    property.imagesNames = property.imagesNames.filter(
+      imageObject => imageObject.sourceName !== imageName
+    );
   }
 
   await property.save();
@@ -1526,6 +1653,12 @@ router$2
   .get(fetchProperty)
   .patch(authenticate(), updateProperty)
   .delete(authenticate(), removeProperty);
+
+router$2.patch(
+  `${propertyRoute}/change-status`,
+  authenticate(),
+  changePropertyStatus
+);
 
 // add images to property
 router$2.post(

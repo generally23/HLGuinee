@@ -8,6 +8,7 @@ import {
   removeProperty,
   addPropertyImages,
   removePropertyImages,
+  changePropertyStatus,
   // fetchMyProperties,
   // fetchMyOtherProperties,
 } from '../handlers/property/index';
@@ -34,6 +35,12 @@ router
   .get(fetchProperty)
   .patch(authenticate(), updateProperty)
   .delete(authenticate(), removeProperty);
+
+router.patch(
+  `${propertyRoute}/change-status`,
+  authenticate(),
+  changePropertyStatus
+);
 
 // add images to property
 router.post(
