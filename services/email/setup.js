@@ -1,22 +1,20 @@
-import nodemailer from 'nodemailer';
-
 import { Resend } from 'resend';
 
-export const getEmailTransporter = () => {
-  const { SMTP_HOSTNAME, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD } =
-    process.env;
+// export const getEmailTransporter = () => {
+//   const { SMTP_HOSTNAME, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD } =
+//     process.env;
 
-  const transporter = nodemailer.createTransport({
-    host: SMTP_HOSTNAME,
-    port: SMTP_PORT,
-    auth: {
-      user: SMTP_USERNAME,
-      pass: SMTP_PASSWORD,
-    },
-  });
+//   const transporter = nodemailer.createTransport({
+//     host: SMTP_HOSTNAME,
+//     port: SMTP_PORT,
+//     auth: {
+//       user: SMTP_USERNAME,
+//       pass: SMTP_PASSWORD,
+//     },
+//   });
 
-  return transporter;
-};
+//   return transporter;
+// };
 
 // export const sendEmail = content => {
 //   let attempts = 0;

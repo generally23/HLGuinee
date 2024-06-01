@@ -284,8 +284,8 @@ export const buildSearchStage = (
   searchTerm,
   { northEastBounds, southWestBounds }
 ) => {
-  console.log('northEastBounds', northEastBounds);
-  console.log('southWestBounds', southWestBounds);
+  // console.log('northEastBounds', northEastBounds);
+  // console.log('southWestBounds', southWestBounds);
 
   // mongodb atlas search index name
   const index = 'main_search';

@@ -19,22 +19,9 @@ var fs = require('fs/promises');
 var turf = require('@turf/turf');
 var argon = require('argon2');
 var emailValidator = require('email-validator');
-var nodemailer = require('nodemailer');
-require('resend');
+var resend = require('resend');
 var pug = require('pug');
 var expressQueryParser = require('express-query-parser');
-
-const router$3 = express.Router();
-
-router$3.get('/', (req, res) => res.send('Welcome to my webserver'));
-
-/* 
-    Always serve the same html file since this is a single page app
-    React will handle the routing on the client
-  */
-router$3.all('*', (req, res) =>
-  res.sendFile(path.resolve(__dirname, 'public', 'index.html'))
-);
 
 const createS3Instance = () => {
   // AWS CONFIGURATION
@@ -113,9 +100,8 @@ const catchAsyncErrors = f => {
 };
 
 const globalErrorHandler = (err, req, res, next) => {
-  console.error('The Error Happened Here!!! : ', err, err.operational);
+  // console.error('The Error Happened Here!!! : ', err, err.operational);
 
-  // const { ENVIRONMENT = 'dev' } = process.env;
   const { ENVIRONMENT = 'dev' } = process.env;
 
   console.log(ENVIRONMENT);
@@ -123,7 +109,6 @@ const globalErrorHandler = (err, req, res, next) => {
   if (ENVIRONMENT === 'dev') {
     // known error
     if (err.operational) {
-      console.log('sendin error rn');
       res.status(err.statusCode).json({ ...err, message: err.message });
     } else {
       // send error
@@ -166,7 +151,7 @@ const globalErrorHandler = (err, req, res, next) => {
     } else {
       res
         .status(500)
-        .json({ message: 'Something went wrong', statusCode: 500 });
+        .json({ message: `Une erreur s'est produite`, statusCode: 500 });
     }
   }
 };
@@ -436,8 +421,8 @@ const buildSearchStage = (
   searchTerm,
   { northEastBounds, southWestBounds }
 ) => {
-  console.log('northEastBounds', northEastBounds);
-  console.log('southWestBounds', southWestBounds);
+  // console.log('northEastBounds', northEastBounds);
+  // console.log('southWestBounds', southWestBounds);
 
   // mongodb atlas search index name
   const index = 'main_search';
@@ -1695,21 +1680,64 @@ const VERFIFY_ACCOUNT_FAIL_ERROR_MESSAGE = `Malheureusement, nous n'avions pas p
 
 const MAIL_DELIVERY_FAIL_ERROR_MESSAGE = `Malheuresement notre service email n'a pas pu vous délivrer l'email`;
 
-const getEmailTransporter = () => {
-  const { SMTP_HOSTNAME, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD } =
-    process.env;
+// export const getEmailTransporter = () => {
+//   const { SMTP_HOSTNAME, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD } =
+//     process.env;
 
-  const transporter = nodemailer.createTransport({
-    host: SMTP_HOSTNAME,
-    port: SMTP_PORT,
-    auth: {
-      user: SMTP_USERNAME,
-      pass: SMTP_PASSWORD,
-    },
-  });
+//   const transporter = nodemailer.createTransport({
+//     host: SMTP_HOSTNAME,
+//     port: SMTP_PORT,
+//     auth: {
+//       user: SMTP_USERNAME,
+//       pass: SMTP_PASSWORD,
+//     },
+//   });
 
-  return transporter;
-};
+//   return transporter;
+// };
+
+// export const sendEmail = content => {
+//   let attempts = 0;
+//   let maxAttempts = 3;
+//   let timeout = 0;
+
+//   const { SMTP_HOSTNAME, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD } =
+//     process.env;
+
+//   const transporter = nodemailer.createTransport({
+//     host: SMTP_HOSTNAME,
+//     port: SMTP_PORT,
+//     auth: {
+//       user: SMTP_USERNAME,
+//       pass: SMTP_PASSWORD,
+//     },
+//   });
+
+//   return new Promise((resolve, reject) => {
+//     const sender = async () => {
+//       attempts++;
+
+//       console.log('I am sending the email ', attempts);
+
+//       if (attempts >= maxAttempts) return reject('failed to send mail');
+
+//       try {
+//         await transporter.sendMail(content);
+
+//         resolve('sent');
+//       } catch (error) {
+//         timeout += 1000;
+//         setTimeout(sender, timeout);
+//       }
+//     };
+
+//     return sender();
+//   });
+// };
+
+// console.log('API KEY: ', process.env);
+
+const getMailService = () => new resend.Resend(process.env.RESEND_API_KEY);
 
 const getHTMLTemplate = (templateName, locals) => {
   const templatePath = path.resolve(
@@ -1727,26 +1755,20 @@ const getHTMLTemplate = (templateName, locals) => {
   }
 };
 
-// import { render } from '@react-email/render';
-// import { ResetPasswordComponent } from './templates/reset-password';
-
-const createEmail = (to, subject = '', text = '', html = '') => {
+const createEmail = (to, subject = '', text = '', html = '', react = '') => {
   return {
     from: process.env.SERVER_EMAIL,
     to,
     subject,
     text,
     html,
+    react,
   };
 };
 
-const sendEmail = async email => {
-  const transporter = getEmailTransporter();
+const sendEmail = async email => getMailService().emails.send(email);
 
-  return transporter.sendMail(email);
-};
-
-const sendVerificationEmail = async (emailAddress, verificationUrl) => {
+const sendVerificationEmail = (emailAddress, verificationUrl) => {
   // send email to client
   const subject = 'Verifiez votre compte';
 
@@ -1759,15 +1781,13 @@ const sendVerificationEmail = async (emailAddress, verificationUrl) => {
   return sendEmail(email);
 };
 
-const sendForgotPasswordEmail = async (receiverEmail, resetUrl) => {
-  const subject = 'Reset Password Instructions ✔';
+const sendForgotPasswordEmail = (receiverEmail, resetUrl) => {
+  const subject = 'Reinitialiser votre mot de passe ✔';
 
-  // const html = getHTMLTemplate('reset-password.pug', { resetUrl });
-
-  const html = render(ResetPasswordComponent({ resetUrl }));
+  const html = getHTMLTemplate('reset-password.pug', { resetUrl });
 
   // send email to client
-  const email = createEmail(receiverEmail, subject, '', html);
+  const email = createEmail(receiverEmail, subject, '', html, '');
 
   return sendEmail(email);
 };
@@ -1964,9 +1984,12 @@ const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
   const resetUrl = `${req.protocol}://${req.hostname}:3000/reset-password/${resetToken}`;
 
   try {
-    await sendForgotPasswordEmail(email, resetUrl);
+    const response = await sendForgotPasswordEmail(email, resetUrl);
+
+    console.log(response);
   } catch (e) {
-    // console.log(e);
+    console.log(e);
+
     return next(new ServerError(MAIL_DELIVERY_FAIL_ERROR_MESSAGE));
   }
 
@@ -2444,15 +2467,12 @@ const setupExpressMiddleware = server => {
 // Port listener
 const listen = async (
   server,
-  port = parseInt(process.env.PORT) || 9090
+  port = parseInt(process.env.PORT) || 80
 ) => {
   try {
     await server.listen(port, console.log);
-    console.clear();
   } catch (error) {
-    console.log('failing to listen on port 9090', error);
-
-    // we must able to listen for connection on this port shutdown server
+    // we must be able to listen for connection on this port shutdown server
     process.exit();
   }
 };

@@ -9,7 +9,7 @@ import dotenv from 'dotenv';
 
 import mongoSanitize from 'express-mongo-sanitize';
 
-import SERVER_ROUTER from './routers/Webserver';
+// import SERVER_ROUTER from './routers/Webserver';
 import API_ROUTER from './routers/Api';
 
 import { globalErrorHandler } from './handlers/errors';
@@ -138,15 +138,12 @@ export const setupExpressMiddleware = server => {
 // Port listener
 export const listen = async (
   server,
-  port = parseInt(process.env.PORT) || 9090
+  port = parseInt(process.env.PORT) || 80
 ) => {
   try {
     await server.listen(port, console.log);
-    console.clear();
   } catch (error) {
-    console.log('failing to listen on port 9090', error);
-
-    // we must able to listen for connection on this port shutdown server
+    // we must be able to listen for connection on this port shutdown server
     process.exit();
   }
 };

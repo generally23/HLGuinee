@@ -242,9 +242,12 @@ export const forgotMyPassword = catchAsyncErrors(async (req, res, next) => {
   const resetUrl = `${req.protocol}://${req.hostname}:3000/reset-password/${resetToken}`;
 
   try {
-    await sendForgotPasswordEmail(email, resetUrl);
+    const response = await sendForgotPasswordEmail(email, resetUrl);
+
+    console.log(response);
   } catch (e) {
-    // console.log(e);
+    console.log(e);
+
     return next(new ServerError(MAIL_DELIVERY_FAIL_ERROR_MESSAGE));
   }
 
